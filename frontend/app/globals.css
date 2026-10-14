@@ -35,7 +35,7 @@
 .choice-card { padding-top:31px; }
 .choice-card h1 { font-size:34px; }
 .auth-card label { display:block; margin:0 0 14px; color:#d4d1dc; font-size:11px; font-weight:700; }
-.auth-card input { display:block; width:100%; margin-top:7px; padding:14px; border:1px solid #4a4853; border-radius:12px; outline:none; background:#292933; color:#fff; font-size:14px; }
+.auth-card input { display:block; width:100%; margin-top:7px; padding:14px; border:1px solid #4a4853; border-radius:12px; outline:none; background:#292933; color:#fff; font-size:16px; }
 .auth-card input::placeholder { color:#817e8b; }
 .auth-card input:focus { border-color:var(--purple); box-shadow:0 0 0 3px rgba(154,124,255,.14); }
 .auth-action { display:block; width:100%; margin-top:11px; }

@@ -5,7 +5,8 @@ import { useEffect, useMemo, useState } from 'react';
 type Task = { id: number; title: string; meta: string; color: string; done: boolean };
 type Tab = 'today' | 'plan' | 'focus' | 'community' | 'profile';
 type Panel = { title: string; body: string } | null;
-type Account = { name: string; email: string; phone: string; pinHash: string };
+type Account = { name: string; email: string; phone: string };
+type LegacyAccount = Account & { pinHash: string };
 type AuthScreen = 'choice' | 'register-details' | 'register-pin' | 'login-email' | 'login-pin';
 
 const initialTasks: Task[] = [];
@@ -50,7 +51,6 @@ async function hashPin(pin: string) {
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('today');
   const [account, setAccount] = useState<Account | null>(null);
-  const [accounts, setAccounts] = useState<Account[]>([]);
   const [authenticated, setAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [tasks, setTasks] = useState(initialTasks);
@@ -69,6 +69,7 @@ export default function Home() {
   useEffect(() => {
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => undefined);
     const saved = window.localStorage.getItem('cave-progress-v1');
+    const savedSession = window.localStorage.getItem('cave-session-v1');
     const savedAccounts = window.localStorage.getItem('cave-accounts-v1');
     if (saved) {
       try {
@@ -80,14 +81,26 @@ export default function Home() {
         window.localStorage.removeItem('cave-progress-v1');
       }
     }
-    if (savedAccounts) {
+    if (savedSession) {
       try {
-        const registeredAccounts = JSON.parse(savedAccounts) as Account[];
-        const sessionEmail = window.localStorage.getItem('cave-session-email-v1');
-        const currentAccount = registeredAccounts.find((item) => item.email === sessionEmail) ?? null;
-        setAccounts(registeredAccounts);
+        const currentAccount = JSON.parse(savedSession) as Account;
         setAccount(currentAccount);
-        setAuthenticated(Boolean(currentAccount));
+        setAuthenticated(true);
+      } catch {
+        window.localStorage.removeItem('cave-session-v1');
+      }
+    } else if (savedAccounts) {
+      try {
+        const registeredAccounts = JSON.parse(savedAccounts) as LegacyAccount[];
+        const sessionEmail = window.localStorage.getItem('cave-session-email-v1');
+        const legacyAccount = registeredAccounts.find((item) => item.email === sessionEmail);
+        if (legacyAccount) {
+          const currentAccount = { name: legacyAccount.name, email: legacyAccount.email, phone: legacyAccount.phone };
+          window.localStorage.setItem('cave-session-v1', JSON.stringify(currentAccount));
+          setAccount(currentAccount);
+          setAuthenticated(true);
+          void fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'migrate', ...legacyAccount }) });
+        }
       } catch {
         window.localStorage.removeItem('cave-accounts-v1');
         window.localStorage.removeItem('cave-session-email-v1');
@@ -146,25 +159,20 @@ export default function Home() {
   }
 
   function finishAuthentication(nextAccount: Account) {
-    setAccounts((current) => {
-      const nextAccounts = [...current.filter((item) => item.email !== nextAccount.email), nextAccount];
-      window.localStorage.setItem('cave-accounts-v1', JSON.stringify(nextAccounts));
-      return nextAccounts;
-    });
-    window.localStorage.setItem('cave-session-email-v1', nextAccount.email);
+    window.localStorage.setItem('cave-session-v1', JSON.stringify(nextAccount));
     setAccount(nextAccount);
     setAuthenticated(true);
   }
 
   function logout() {
     setTimerRunning(false);
-    window.localStorage.removeItem('cave-session-email-v1');
+    window.localStorage.removeItem('cave-session-v1');
     setAuthenticated(false);
     setActiveTab('today');
   }
 
   if (authLoading) return <main className="auth-shell"><div className="auth-loading">cave</div></main>;
-  if (!authenticated) return <AuthFlow accounts={accounts} onAuthenticated={finishAuthentication} />;
+  if (!authenticated) return <AuthFlow onAuthenticated={finishAuthentication} />;
 
   return (
     <main className="app-shell">
@@ -197,13 +205,14 @@ function InfoPanel({ panel, onClose }: { panel: NonNullable<Panel>; onClose: () 
   return <div className="modal-backdrop" onClick={onClose}><section className="add-modal info-modal" onClick={(event) => event.stopPropagation()} aria-modal="true" role="dialog" aria-labelledby="panel-title"><div className="modal-handle" /><h2 id="panel-title">{panel.title}</h2><p>{panel.body}</p><button className="primary-button" onClick={onClose}>Entendi</button></section></div>;
 }
 
-function AuthFlow({ accounts, onAuthenticated }: { accounts: Account[]; onAuthenticated: (account: Account) => void }) {
+function AuthFlow({ onAuthenticated }: { onAuthenticated: (account: Account) => void }) {
   const [screen, setScreen] = useState<AuthScreen>('choice');
   const [details, setDetails] = useState({ name: '', email: '', phone: '' });
   const [email, setEmail] = useState('');
-  const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
+  const [selectedEmail, setSelectedEmail] = useState('');
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   function show(nextScreen: AuthScreen) {
     setError('');
@@ -214,39 +223,48 @@ function AuthFlow({ accounts, onAuthenticated }: { accounts: Account[]; onAuthen
   function continueRegistration(event: React.FormEvent) {
     event.preventDefault();
     const normalized = normalizeEmail(details.email);
-    if (accounts.some((item) => item.email === normalized)) {
-      setError('Este e-mail já está cadastrado neste dispositivo. Use Entrar.');
-      return;
-    }
     setDetails((current) => ({ ...current, email: normalized }));
     show('register-pin');
   }
 
   function continueLogin(event: React.FormEvent) {
     event.preventDefault();
-    const found = accounts.find((item) => item.email === normalizeEmail(email));
-    if (!found) {
-      setError('Não encontramos este e-mail neste dispositivo.');
-      return;
-    }
-    setSelectedAccount(found);
+    setSelectedEmail(normalizeEmail(email));
     show('login-pin');
+  }
+
+  async function requestAccount(payload: Record<string, string>) {
+    const response = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const data = await response.json() as { user?: Account; error?: string };
+    if (!response.ok || !data.user) throw new Error(data.error ?? 'Não foi possível acessar sua conta agora.');
+    return data.user;
   }
 
   async function register() {
     if (pin.length !== 4) return setError('Digite os quatro números do seu PIN.');
-    const pinHash = await hashPin(pin);
-    onAuthenticated({ ...details, email: normalizeEmail(details.email), pinHash });
+    setSubmitting(true);
+    try {
+      const user = await requestAccount({ action: 'register', ...details, email: normalizeEmail(details.email), pinHash: await hashPin(pin) });
+      onAuthenticated(user);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Não foi possível criar sua conta.');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   async function login() {
-    if (!selectedAccount || pin.length !== 4) return setError('Digite os quatro números do seu PIN.');
-    if (await hashPin(pin) !== selectedAccount.pinHash) {
-      setError('PIN incorreto. Tente novamente.');
+    if (!selectedEmail || pin.length !== 4) return setError('Digite os quatro números do seu PIN.');
+    setSubmitting(true);
+    try {
+      const user = await requestAccount({ action: 'login', email: selectedEmail, pinHash: await hashPin(pin) });
+      onAuthenticated(user);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Não foi possível entrar agora.');
       setPin('');
-      return;
+    } finally {
+      setSubmitting(false);
     }
-    onAuthenticated(selectedAccount);
   }
 
   if (screen === 'choice') return <main className="auth-shell"><AuthBrand /><section className="auth-card choice-card"><span className="eyebrow">Seu espaço, no seu ritmo</span><h1>Bem-vindo à Cave.</h1><p>Organize o que importa e avance uma tarefa de cada vez.</p><button className="primary-button auth-action" onClick={() => show('login-email')}>Entrar</button><button className="secondary-button auth-action" onClick={() => show('register-details')}>Cadastrar</button></section></main>;
@@ -256,7 +274,7 @@ function AuthFlow({ accounts, onAuthenticated }: { accounts: Account[]; onAuthen
   if (screen === 'login-email') return <main className="auth-shell"><AuthBrand /><form className="auth-card" onSubmit={continueLogin}><span className="eyebrow">Entrar</span><h1>Qual é seu e-mail?</h1><p>Vamos localizar sua conta salva neste aparelho.</p><label>E-mail<input autoFocus required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@email.com" /></label>{error && <p className="auth-error" role="alert">{error}</p>}<button className="primary-button auth-action" type="submit">Continuar</button><button className="auth-back" type="button" onClick={() => show('choice')}>Voltar</button></form></main>;
 
   const isRegistration = screen === 'register-pin';
-  return <main className="auth-shell"><AuthBrand /><section className="auth-card pin-card"><span className="eyebrow">{isRegistration ? 'Proteja seu acesso' : 'Olá de novo'}</span><h1>{isRegistration ? 'Crie seu PIN.' : `Oi, ${selectedAccount?.name.split(' ')[0] ?? ''}.`}</h1><p>{isRegistration ? 'Escolha quatro números para abrir a Cave.' : 'Digite seu PIN para continuar.'}</p><PinKeypad pin={pin} onChange={setPin} /><div className="pin-status" aria-live="polite">{pin.length}/4 números</div>{error && <p className="auth-error" role="alert">{error}</p>}<button className="primary-button auth-action" disabled={pin.length !== 4} onClick={isRegistration ? register : login}>{isRegistration ? 'Criar acesso' : 'Entrar na Cave'}</button><button className="auth-back" type="button" onClick={() => show(isRegistration ? 'register-details' : 'login-email')}>Voltar</button></section></main>;
+  return <main className="auth-shell"><AuthBrand /><section className="auth-card pin-card"><span className="eyebrow">{isRegistration ? 'Proteja seu acesso' : 'Olá de novo'}</span><h1>{isRegistration ? 'Crie seu PIN.' : 'Bem-vindo de volta.'}</h1><p>{isRegistration ? 'Escolha quatro números para abrir a Cave.' : 'Digite seu PIN para continuar.'}</p><PinKeypad pin={pin} onChange={setPin} /><div className="pin-status" aria-live="polite">{pin.length}/4 números</div>{error && <p className="auth-error" role="alert">{error}</p>}<button className="primary-button auth-action" disabled={pin.length !== 4 || submitting} onClick={isRegistration ? register : login}>{submitting ? 'Aguarde…' : isRegistration ? 'Criar acesso' : 'Entrar na Cave'}</button><button className="auth-back" type="button" disabled={submitting} onClick={() => show(isRegistration ? 'register-details' : 'login-email')}>Voltar</button></section></main>;
 }
 
 function AuthBrand() {
