@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-type Task = { id: number; title: string; meta: string; color: string; done: boolean };
+type Routine = 'morning' | 'afternoon' | 'night';
+type Task = { id: number; title: string; meta: string; color: string; done: boolean; routine: Routine };
 type Tab = 'today' | 'plan' | 'focus' | 'community' | 'profile';
 type Panel = { title: string; body: string } | null;
 type Account = { name: string; email: string; phone: string; sessionToken?: string };
@@ -74,6 +75,7 @@ export default function Home() {
   const [timerRunning, setTimerRunning] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
   const [newTask, setNewTask] = useState('');
+  const [newRoutine, setNewRoutine] = useState<Routine>('morning');
   const [panel, setPanel] = useState<Panel>(null);
   const [toast, setToast] = useState('');
   const completed = tasks.filter((task) => task.done).length;
@@ -87,7 +89,7 @@ export default function Home() {
     if (saved) {
       try {
         const data = JSON.parse(saved) as { tasks?: Task[]; focusSeconds?: number; completedSessions?: number };
-        setTasks(data.tasks ?? []);
+        setTasks((data.tasks ?? []).map((task) => ({ ...task, routine: task.routine ?? 'morning' })));
         setFocusSeconds(data.focusSeconds ?? 0);
         setCompletedSessions(data.completedSessions ?? 0);
       } catch {
@@ -186,10 +188,29 @@ export default function Home() {
   function addTask(event: React.FormEvent) {
     event.preventDefault();
     if (!newTask.trim()) return;
-    setTasks((current) => [...current, { id: Date.now(), title: newTask.trim(), meta: 'Sem horário definido', color: 'sky', done: false }]);
+    setTasks((current) => [...current, { id: Date.now(), title: newTask.trim(), meta: 'Sem horário definido', color: 'sky', done: false, routine: newRoutine }]);
     setNewTask('');
     setShowAddTask(false);
     notify('Tarefa adicionada à sua rotina.');
+  }
+
+  function deleteTask(id: number) {
+    setTasks((current) => current.filter((task) => task.id !== id));
+    notify('Tarefa removida da rotina.');
+  }
+
+  function reorderTask(sourceId: number, targetId: number) {
+    if (sourceId === targetId) return;
+    setTasks((current) => {
+      const sourceIndex = current.findIndex((task) => task.id === sourceId);
+      const targetIndex = current.findIndex((task) => task.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0) return current;
+      const next = [...current];
+      const [source] = next.splice(sourceIndex, 1);
+      source.routine = current[targetIndex].routine;
+      next.splice(targetIndex, 0, source);
+      return next;
+    });
   }
 
   function finishAuthentication(nextAccount: Account) {
@@ -217,7 +238,7 @@ export default function Home() {
       </header>
 
       <div className="page-content">
-        {activeTab === 'today' && <TodayView dateLabel={dateLabel} tasks={tasks} completed={completed} progress={progress} focusSeconds={focusSeconds} onToggle={toggleTask} onAdd={() => setShowAddTask(true)} onFocus={() => setActiveTab('focus')} />}
+        {activeTab === 'today' && <TodayView dateLabel={dateLabel} tasks={tasks} completed={completed} progress={progress} focusSeconds={focusSeconds} onToggle={toggleTask} onDelete={deleteTask} onReorder={reorderTask} onAdd={() => setShowAddTask(true)} onFocus={() => setActiveTab('focus')} />}
         {activeTab === 'plan' && <PlanView tasks={tasks} onAdd={() => setShowAddTask(true)} onOpenTask={(task) => openPanel(task.title, `${task.meta}. Você pode concluir esta tarefa pela tela Hoje.`)} />}
         {activeTab === 'focus' && <FocusView timerSeconds={timerSeconds} focusSeconds={focusSeconds} completedSessions={completedSessions} running={timerRunning} kind={timerKind} settings={pomodoro} setRunning={setTimerRunning} onSettings={async (next) => { setPomodoro(next); setTimerRunning(false); setTimerKind('focus'); setTimerSeconds(next.focusMinutes * 60); if (account?.sessionToken) await fetch('/api/pomodoro', { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${account.sessionToken}` }, body: JSON.stringify(next) }); notify('Pomodoro atualizado.'); }} reset={() => { setTimerRunning(false); setTimerSeconds((timerKind === 'focus' ? pomodoro.focusMinutes : timerKind === 'shortBreak' ? pomodoro.shortBreakMinutes : pomodoro.longBreakMinutes) * 60); notify('Cronômetro reiniciado.'); }} notify={notify} />}
         {activeTab === 'community' && account && <CommunityView account={account} notify={notify} />}
@@ -228,7 +249,7 @@ export default function Home() {
         {navItems.map((item) => <button key={item.id} className={`nav-item ${activeTab === item.id ? 'active' : ''}`} onClick={() => setActiveTab(item.id)} aria-current={activeTab === item.id ? 'page' : undefined}><span className="nav-icon">{item.icon}</span><span>{item.label}</span></button>)}
       </nav>
 
-      {showAddTask && <div className="modal-backdrop" onClick={() => setShowAddTask(false)}><form className="add-modal" onSubmit={addTask} onClick={(event) => event.stopPropagation()}><div className="modal-handle" /><h2>Nova tarefa</h2><p>Um passo pequeno já muda o ritmo do seu dia.</p><input autoFocus value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="O que você quer realizar?" aria-label="Nova tarefa" /><button className="primary-button" type="submit">Adicionar à rotina</button><button className="modal-cancel" type="button" onClick={() => setShowAddTask(false)}>Cancelar</button></form></div>}
+      {showAddTask && <div className="modal-backdrop" onClick={() => setShowAddTask(false)}><form className="add-modal" onSubmit={addTask} onClick={(event) => event.stopPropagation()}><div className="modal-handle" /><h2>Nova tarefa</h2><p>Um passo pequeno já muda o ritmo do seu dia.</p><input autoFocus value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="O que você quer realizar?" aria-label="Nova tarefa" /><label className="routine-select">Em qual rotina?<select value={newRoutine} onChange={(event) => setNewRoutine(event.target.value as Routine)}><option value="morning">Rotina matinal</option><option value="afternoon">Rotina da tarde</option><option value="night">Rotina da noite</option></select></label><button className="primary-button" type="submit">Adicionar à rotina</button><button className="modal-cancel" type="button" onClick={() => setShowAddTask(false)}>Cancelar</button></form></div>}
       {panel && <InfoPanel panel={panel} onClose={() => setPanel(null)} />}
       {toast && <div className="toast" role="status">✓ {toast}</div>}
     </main>
@@ -338,14 +359,20 @@ function PageHeading({ eyebrow, title, action }: { eyebrow: string; title: strin
   return <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1></div>{action}</div>;
 }
 
-function TodayView({ dateLabel, tasks, completed, progress, focusSeconds, onToggle, onAdd, onFocus }: { dateLabel: string; tasks: Task[]; completed: number; progress: number; focusSeconds: number; onToggle: (id: number) => void; onAdd: () => void; onFocus: () => void }) {
+function TodayView({ dateLabel, tasks, completed, progress, focusSeconds, onToggle, onDelete, onReorder, onAdd, onFocus }: { dateLabel: string; tasks: Task[]; completed: number; progress: number; focusSeconds: number; onToggle: (id: number) => void; onDelete: (id: number) => void; onReorder: (source: number, target: number) => void; onAdd: () => void; onFocus: () => void }) {
   return <>
     <section className="hero-section"><div className="eyebrow">{dateLabel}</div><h1>Seu progresso<br /><em>começa hoje.</em></h1><p>Uma tarefa de cada vez.</p><div className="hero-orbit orbit-one" /><div className="hero-orbit orbit-two" /><div className="hero-spark">✦</div></section>
     <section className="stat-grid"><div className="stat-card"><span className="stat-label">Tarefas concluídas</span><strong>{completed}<small>/{tasks.length}</small></strong><div className="mini-progress"><i style={{ width: `${progress}%` }} /></div><span className="stat-foot">Progresso de hoje</span></div><div className="stat-card accent-card"><span className="stat-label">Foco registrado</span><strong>{formatDuration(focusSeconds)}</strong><span className="stat-foot">Registrado nesta sessão</span></div></section>
-    <section className="section-block"><div className="section-title"><div><span className="eyebrow">Acompanhe o ritmo</span><h2>Sua rotina</h2></div><button className="text-button" onClick={onAdd}>+ Adicionar</button></div><div className="routine-card"><div className="routine-top"><span>Hoje</span><strong>{progress}% concluído</strong></div><div className="large-progress"><i style={{ width: `${progress}%` }} /></div><div className="task-list">{tasks.length ? tasks.map((task) => <button className={`task-row ${task.done ? 'is-done' : ''}`} key={task.id} onClick={() => onToggle(task.id)} aria-pressed={task.done}><span className={`task-check ${task.done ? 'checked' : ''}`}>{task.done ? '✓' : ''}</span><span className="task-copy"><strong>{task.title}</strong><small>{task.meta}</small></span><span className={`task-color ${task.color}`} /></button>) : <p className="empty-state">Adicione sua primeira tarefa para começar.</p>}</div></div></section>
+    <section className="section-block"><div className="section-title"><div><span className="eyebrow">Acompanhe o ritmo</span><h2>Suas rotinas</h2></div><button className="text-button" onClick={onAdd}>+ Adicionar</button></div><div className="routine-card"><div className="routine-top"><span>Hoje</span><strong>{progress}% concluído</strong></div><div className="large-progress"><i style={{ width: `${progress}%` }} /></div><p className="reorder-hint">Segure o ícone ⠿ e arraste para reorganizar.</p>{(['morning', 'afternoon', 'night'] as Routine[]).map((routine) => <RoutineGroup key={routine} routine={routine} tasks={tasks.filter((task) => task.routine === routine)} onToggle={onToggle} onDelete={onDelete} onReorder={onReorder} />)}{!tasks.length && <p className="empty-state">Adicione sua primeira tarefa para começar.</p>}</div></section>
     <section className="focus-banner"><div className="focus-symbol">◷</div><div><span className="eyebrow">Espaço de foco</span><h2>Reserve um tempo para você.</h2><p>25 minutos de presença podem mudar o seu dia.</p></div><button className="round-arrow" onClick={onFocus} aria-label="Abrir central de foco">↗</button></section>
     <section className="quote-card"><span>“</span><p>Consistência não é fazer tudo. É voltar para o que importa.</p><small>— Seu Cave de hoje</small></section>
   </>;
+}
+
+function RoutineGroup({ routine, tasks, onToggle, onDelete, onReorder }: { routine: Routine; tasks: Task[]; onToggle: (id: number) => void; onDelete: (id: number) => void; onReorder: (source: number, target: number) => void }) {
+  const [dragging, setDragging] = useState<number | null>(null);
+  const label = routine === 'morning' ? 'Rotina matinal' : routine === 'afternoon' ? 'Rotina da tarde' : 'Rotina da noite';
+  return <section className="routine-group"><h3>{label}<small>{tasks.length} {tasks.length === 1 ? 'tarefa' : 'tarefas'}</small></h3><div className="task-list">{tasks.length ? tasks.map((task) => <div className={`task-row ${task.done ? 'is-done' : ''} ${dragging === task.id ? 'dragging' : ''}`} data-task-id={task.id} key={task.id}><button className="drag-handle" type="button" aria-label={`Segurar para mover ${task.title}`} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); setDragging(task.id); }} onPointerMove={(event) => { if (dragging !== task.id) return; const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-task-id]'); const targetId = Number(target?.dataset.taskId); if (targetId) onReorder(task.id, targetId); }} onPointerUp={() => setDragging(null)} onPointerCancel={() => setDragging(null)}>⠿</button><button className="task-main" onClick={() => onToggle(task.id)} aria-pressed={task.done}><span className={`task-check ${task.done ? 'checked' : ''}`}>{task.done ? '✓' : ''}</span><span className="task-copy"><strong>{task.title}</strong><small>{task.meta}</small></span><span className={`task-color ${task.color}`} /></button><button className="task-delete" type="button" aria-label={`Excluir ${task.title}`} onClick={() => onDelete(task.id)}>×</button></div>) : <p className="routine-empty">Nenhuma tarefa nesta rotina.</p>}</div></section>;
 }
 
 function LegacyPlanView({ tasks, onAdd, onOpenTask }: { tasks: Task[]; onAdd: () => void; onOpenTask: (task: Task) => void }) {
