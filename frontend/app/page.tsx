@@ -79,7 +79,7 @@ export default function Home() {
   const [newRoutine, setNewRoutine] = useState<Routine>('morning');
   const [newNote, setNewNote] = useState('');
   const [newDueAt, setNewDueAt] = useState('');
-  const [newRepeat, setNewRepeat] = useState<Task['repeat']>('none');
+  const [newRepeat, setNewRepeat] = useState<Task['repeat']>('daily');
   const [newPriority, setNewPriority] = useState<Task['priority']>('medium');
   const [newEstimate, setNewEstimate] = useState(25);
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -169,7 +169,7 @@ export default function Home() {
           await Promise.all(tasks.map((task) => workspace('createTask', { title: task.title, note: task.note ?? '', dueAt: task.dueAt ?? '', repeat: task.repeat ?? 'none', priority: task.priority ?? 'medium', estimateMinutes: task.estimateMinutes ?? 25, routine: task.routine })));
           return void loadWorkspace();
         }
-        setTasks(remoteTasks.map((task) => ({ ...task, meta: task.dueAt ? new Date(task.dueAt).toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Sem horário definido', color: task.priority === 'high' ? 'peach' : task.priority === 'low' ? 'mint' : 'sky' })));
+        setTasks(remoteTasks.map((task) => ({ ...task, meta: task.dueAt ? new Date(task.dueAt).toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : task.repeat === 'daily' ? 'Todos os dias' : 'Sem horário definido', color: task.priority === 'high' ? 'peach' : task.priority === 'low' ? 'mint' : 'sky' })));
       }
       if (goalResponse.ok) setGoals(goalData.goals ?? []);
       if (historyResponse.ok) setFocusHistory(historyData.history ?? []);
@@ -246,7 +246,7 @@ export default function Home() {
       await loadWorkspace();
     } catch (error) { notify(error instanceof Error ? error.message : 'Não foi possível adicionar a tarefa.'); return; }
     setNewTask('');
-    setNewNote(''); setNewDueAt(''); setNewRepeat('none'); setNewPriority('medium'); setNewEstimate(25);
+    setNewNote(''); setNewDueAt(''); setNewRepeat('daily'); setNewPriority('medium'); setNewEstimate(25);
     setShowAddTask(false);
     notify('Tarefa adicionada à sua rotina.');
   }
@@ -308,7 +308,7 @@ export default function Home() {
         {navItems.map((item) => <button key={item.id} className={`nav-item ${activeTab === item.id ? 'active' : ''}`} onClick={() => setActiveTab(item.id)} aria-current={activeTab === item.id ? 'page' : undefined}><span className="nav-icon">{item.icon}</span><span>{item.label}</span></button>)}
       </nav>
 
-      {showAddTask && <div className="modal-backdrop" onClick={() => setShowAddTask(false)}><form className="add-modal task-modal" onSubmit={addTask} onClick={(event) => event.stopPropagation()}><div className="modal-handle" /><h2>Nova tarefa</h2><p>Planeje o que importa sem lotar seu dia.</p><input autoFocus required value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="O que você quer realizar?" aria-label="Nova tarefa" /><textarea value={newNote} onChange={(event) => setNewNote(event.target.value)} placeholder="Nota ou checklist (opcional)" maxLength={1000} /><div className="task-fields"><label>Quando<input type="datetime-local" value={newDueAt} onChange={(event) => setNewDueAt(event.target.value)} /></label><label>Prioridade<select value={newPriority} onChange={(event) => setNewPriority(event.target.value as Task['priority'])}><option value="high">Alta</option><option value="medium">Média</option><option value="low">Baixa</option></select></label><label>Tempo (min)<input type="number" min="1" max="600" value={newEstimate} onChange={(event) => setNewEstimate(Number(event.target.value))} /></label><label>Repetir<select value={newRepeat} onChange={(event) => setNewRepeat(event.target.value as Task['repeat'])}><option value="none">Não repetir</option><option value="daily">Todos os dias</option><option value="weekdays">Dias úteis</option><option value="weekly">Semanalmente</option></select></label></div><label className="routine-select">Em qual rotina?<select value={newRoutine} onChange={(event) => setNewRoutine(event.target.value as Routine)}><option value="morning">Rotina matinal</option><option value="afternoon">Rotina da tarde</option><option value="night">Rotina da noite</option></select></label><button className="primary-button" type="submit">Adicionar à rotina</button><button className="modal-cancel" type="button" onClick={() => setShowAddTask(false)}>Cancelar</button></form></div>}
+      {showAddTask && <div className="modal-backdrop" onClick={() => setShowAddTask(false)}><form className="add-modal task-modal" onSubmit={addTask} onClick={(event) => event.stopPropagation()}><div className="modal-handle" /><h2>Nova rotina</h2><p>Ela aparecerá todos os dias no seu ritmo.</p><input autoFocus required value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="O que você quer realizar?" aria-label="Nova rotina" /><textarea value={newNote} onChange={(event) => setNewNote(event.target.value)} placeholder="Nota ou checklist (opcional)" maxLength={1000} /><div className="task-fields"><label>Prioridade<select value={newPriority} onChange={(event) => setNewPriority(event.target.value as Task['priority'])}><option value="high">Alta</option><option value="medium">Média</option><option value="low">Baixa</option></select></label><label>Tempo (min)<input type="number" min="1" max="600" value={newEstimate} onChange={(event) => setNewEstimate(Number(event.target.value))} /></label></div><label className="routine-select">Em qual rotina?<select value={newRoutine} onChange={(event) => setNewRoutine(event.target.value as Routine)}><option value="morning">Rotina matinal</option><option value="afternoon">Rotina da tarde</option><option value="night">Rotina da noite</option></select></label><button className="primary-button" type="submit">Adicionar à rotina</button><button className="modal-cancel" type="button" onClick={() => setShowAddTask(false)}>Cancelar</button></form></div>}
       {panel && <InfoPanel panel={panel} onClose={() => setPanel(null)} />}
       {toast && <div className="toast" role="status">✓ {toast}</div>}
     </main>
