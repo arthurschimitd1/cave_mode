@@ -60,5 +60,5 @@
 
 /* Keep controls clear of the iPhone notch and home indicator in standalone mode. */
 .app-shell { padding-bottom:calc(96px + env(safe-area-inset-bottom)); }
-.topbar { padding-top:calc(10px + env(safe-area-inset-top)); }
+.topbar { padding-top:max(23px, calc(10px + env(safe-area-inset-top))); }
 .bottom-nav { padding-bottom:calc(14px + env(safe-area-inset-bottom)); }
