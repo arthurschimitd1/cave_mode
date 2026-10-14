@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { Pool } from 'pg';
+import { randomBytes } from 'crypto';
 
 export const runtime = 'nodejs';
 
@@ -26,6 +27,14 @@ async function ensureUsersTable() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await getPool().query(`
+    CREATE TABLE IF NOT EXISTS cave_sessions (
+      token TEXT PRIMARY KEY,
+      email TEXT NOT NULL REFERENCES cave_users(email) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL
+    )
+  `);
 }
 
 function normalizedEmail(email: string) {
@@ -41,6 +50,13 @@ function validCredentials(data: Payload) {
 
 function user(row: Account) {
   return { name: row.name, email: row.email, phone: row.phone };
+}
+
+async function createSession(email: string) {
+  const token = randomBytes(32).toString('hex');
+  await getPool().query('DELETE FROM cave_sessions WHERE expires_at < NOW() OR email = $1', [email]);
+  await getPool().query('INSERT INTO cave_sessions (token, email, expires_at) VALUES ($1, $2, NOW() + INTERVAL \'365 days\')', [token, email]);
+  return token;
 }
 
 export async function POST(request: Request) {
@@ -59,7 +75,8 @@ export async function POST(request: Request) {
         [account.name, account.email, account.phone, data.pinHash!],
       );
       if (data.action === 'register' && !result.rowCount) return NextResponse.json({ error: 'Este e-mail já possui cadastro. Use Entrar.' }, { status: 409 });
-      return NextResponse.json({ user: result.rows[0] ? user(result.rows[0]) : account }, { status: data.action === 'register' ? 201 : 200 });
+      const registeredUser = result.rows[0] ? user(result.rows[0]) : account;
+      return NextResponse.json({ user: registeredUser, sessionToken: await createSession(registeredUser.email) }, { status: data.action === 'register' ? 201 : 200 });
     }
 
     const result = await getPool().query<Account>(
@@ -67,7 +84,8 @@ export async function POST(request: Request) {
       [email, data.pinHash!],
     );
     if (!result.rowCount) return NextResponse.json({ error: 'E-mail ou PIN não conferem.' }, { status: 401 });
-    return NextResponse.json({ user: user(result.rows[0]) });
+    const loggedUser = user(result.rows[0]);
+    return NextResponse.json({ user: loggedUser, sessionToken: await createSession(loggedUser.email) });
   } catch (error) {
     console.error('Erro de autenticação Cave:', error);
     return NextResponse.json({ error: 'Não foi possível acessar sua conta agora. Tente novamente.' }, { status: 500 });

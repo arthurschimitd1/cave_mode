@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 type Task = { id: number; title: string; meta: string; color: string; done: boolean };
 type Tab = 'today' | 'plan' | 'focus' | 'community' | 'profile';
 type Panel = { title: string; body: string } | null;
-type Account = { name: string; email: string; phone: string };
+type Account = { name: string; email: string; phone: string; sessionToken?: string };
 type LegacyAccount = Account & { pinHash: string };
 type AuthScreen = 'choice' | 'register-details' | 'register-pin' | 'login-email' | 'login-pin';
 
@@ -24,6 +24,8 @@ const soundOptions = [
   { icon: '⌁', name: 'Ruído branco', description: 'Constante' },
   { icon: '♨', name: 'Café', description: 'Ambiente' },
 ];
+type PomodoroSettings = { focusMinutes: number; shortBreakMinutes: number; longBreakMinutes: number; sound: string; soundEnabled: boolean };
+const defaultPomodoro: PomodoroSettings = { focusMinutes: 25, shortBreakMinutes: 5, longBreakMinutes: 15, sound: 'Chuva leve', soundEnabled: true };
 
 function formatTime(seconds: number) {
   const minutes = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -48,13 +50,24 @@ async function hashPin(pin: string) {
   return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+function playBell() {
+  const Audio = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!Audio) return;
+  const context = new Audio(); const oscillator = context.createOscillator(); const gain = context.createGain();
+  oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(660, context.currentTime); oscillator.frequency.exponentialRampToValueAtTime(880, context.currentTime + .35);
+  gain.gain.setValueAtTime(.001, context.currentTime); gain.gain.exponentialRampToValueAtTime(.18, context.currentTime + .03); gain.gain.exponentialRampToValueAtTime(.001, context.currentTime + .7);
+  oscillator.connect(gain).connect(context.destination); oscillator.start(); oscillator.stop(context.currentTime + .72);
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('today');
   const [account, setAccount] = useState<Account | null>(null);
   const [authenticated, setAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [tasks, setTasks] = useState(initialTasks);
+  const [pomodoro, setPomodoro] = useState<PomodoroSettings>(defaultPomodoro);
   const [timerSeconds, setTimerSeconds] = useState(25 * 60);
+  const [timerKind, setTimerKind] = useState<'focus' | 'shortBreak' | 'longBreak'>('focus');
   const [focusSeconds, setFocusSeconds] = useState(0);
   const [completedSessions, setCompletedSessions] = useState(0);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -115,21 +128,38 @@ export default function Home() {
   }, [tasks, focusSeconds, completedSessions, isHydrated]);
 
   useEffect(() => {
+    if (!account?.sessionToken) return;
+    fetch('/api/pomodoro', { headers: { Authorization: `Bearer ${account.sessionToken}` } }).then(async (response) => {
+      const data = await response.json() as { settings?: PomodoroSettings };
+      if (response.ok && data.settings) { setPomodoro(data.settings); setTimerSeconds(data.settings.focusMinutes * 60); }
+    }).catch(() => undefined);
+  }, [account?.sessionToken]);
+
+  useEffect(() => {
     if (!timerRunning) return;
     const timer = window.setInterval(() => {
       setTimerSeconds((current) => {
         setFocusSeconds((total) => total + 1);
         if (current <= 1) {
           setTimerRunning(false);
-          setCompletedSessions((total) => total + 1);
-          setToast('Sessão concluída. Excelente presença!');
-          return 25 * 60;
+          playBell();
+          if (timerKind === 'focus') {
+            const nextTotal = completedSessions + 1;
+            setCompletedSessions(nextTotal);
+            const longBreak = nextTotal % 4 === 0;
+            setTimerKind(longBreak ? 'longBreak' : 'shortBreak');
+            setToast(longBreak ? 'Ciclo concluído. Hora da pausa longa.' : 'Sessão concluída. Hora de uma pausa curta.');
+            return (longBreak ? pomodoro.longBreakMinutes : pomodoro.shortBreakMinutes) * 60;
+          }
+          setTimerKind('focus');
+          setToast('Pausa concluída. Pronto para focar de novo?');
+          return pomodoro.focusMinutes * 60;
         }
         return current - 1;
       });
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [timerRunning]);
+  }, [timerRunning, timerKind, completedSessions, pomodoro]);
 
   useEffect(() => {
     if (!toast) return;
@@ -185,8 +215,8 @@ export default function Home() {
       <div className="page-content">
         {activeTab === 'today' && <TodayView dateLabel={dateLabel} tasks={tasks} completed={completed} progress={progress} focusSeconds={focusSeconds} onToggle={toggleTask} onAdd={() => setShowAddTask(true)} onFocus={() => setActiveTab('focus')} />}
         {activeTab === 'plan' && <PlanView tasks={tasks} onAdd={() => setShowAddTask(true)} onOpenTask={(task) => openPanel(task.title, `${task.meta}. Você pode concluir esta tarefa pela tela Hoje.`)} />}
-        {activeTab === 'focus' && <FocusView timerSeconds={timerSeconds} focusSeconds={focusSeconds} completedSessions={completedSessions} running={timerRunning} setRunning={setTimerRunning} reset={() => { setTimerRunning(false); setTimerSeconds(25 * 60); notify('Cronômetro reiniciado.'); }} notify={notify} />}
-        {activeTab === 'community' && <CommunityView notify={notify} onOpen={openPanel} />}
+        {activeTab === 'focus' && <FocusView timerSeconds={timerSeconds} focusSeconds={focusSeconds} completedSessions={completedSessions} running={timerRunning} kind={timerKind} settings={pomodoro} setRunning={setTimerRunning} onSettings={async (next) => { setPomodoro(next); setTimerRunning(false); setTimerKind('focus'); setTimerSeconds(next.focusMinutes * 60); if (account?.sessionToken) await fetch('/api/pomodoro', { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${account.sessionToken}` }, body: JSON.stringify(next) }); notify('Pomodoro atualizado.'); }} reset={() => { setTimerRunning(false); setTimerSeconds((timerKind === 'focus' ? pomodoro.focusMinutes : timerKind === 'shortBreak' ? pomodoro.shortBreakMinutes : pomodoro.longBreakMinutes) * 60); notify('Cronômetro reiniciado.'); }} notify={notify} />}
+        {activeTab === 'community' && account && <CommunityView account={account} notify={notify} />}
         {activeTab === 'profile' && account && <ProfileView account={account} completed={completed} focusSeconds={focusSeconds} completedSessions={completedSessions} onOpen={openPanel} onLogout={logout} />}
       </div>
 
@@ -235,9 +265,9 @@ function AuthFlow({ onAuthenticated }: { onAuthenticated: (account: Account) => 
 
   async function requestAccount(payload: Record<string, string>) {
     const response = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-    const data = await response.json() as { user?: Account; error?: string };
+    const data = await response.json() as { user?: Account; sessionToken?: string; error?: string };
     if (!response.ok || !data.user) throw new Error(data.error ?? 'Não foi possível acessar sua conta agora.');
-    return data.user;
+    return { ...data.user, sessionToken: data.sessionToken };
   }
 
   async function register() {
@@ -332,17 +362,46 @@ function PlanView({ tasks, onAdd, onOpenTask }: { tasks: Task[]; onAdd: () => vo
   return <><PageHeading eyebrow="Planejar" title="Dê forma ao seu dia" action={<button className="round-add" onClick={onAdd} aria-label="Adicionar tarefa">+</button>} /><div className="week-strip">{dates.map((date, index) => <button className={index === selectedDay ? 'today' : ''} key={date.toDateString()} onClick={() => setSelectedDay(index)} aria-pressed={index === selectedDay}><span>{new Intl.DateTimeFormat('pt-BR', { weekday: 'short' }).format(date).replace('.', '').toUpperCase()}</span><strong>{date.getDate()}</strong></button>)}</div><section className="section-block"><div className="section-title"><div><span className="eyebrow">{dayLabel}</span><h2>Agenda do dia</h2></div><span className="soft-pill">{tasks.length} itens</span></div><div className="schedule-card">{tasks.length ? tasks.map((task) => <button className="schedule-row" key={task.id} onClick={() => onOpenTask(task)}><span className="schedule-time">—</span><span className={`schedule-line ${task.color}`} /><span><strong>{task.title}</strong><small>{task.meta}</small></span><span className="more">···</span></button>) : <p className="empty-state">Nenhuma tarefa para este dia.</p>}</div></section></>;
 }
 
-function FocusView({ timerSeconds, focusSeconds, completedSessions, running, setRunning, reset, notify }: { timerSeconds: number; focusSeconds: number; completedSessions: number; running: boolean; setRunning: (value: boolean) => void; reset: () => void; notify: (message: string) => void }) {
-  const [selectedSound, setSelectedSound] = useState('Chuva leve');
-  const percent = ((25 * 60 - timerSeconds) / (25 * 60)) * 100;
-  return <><PageHeading eyebrow="Central de foco" title="Presença no agora" action={<span className="soft-pill">Sessões: {completedSessions}</span>} /><section className="timer-card"><div className="timer-ring" style={{ '--progress': `${percent * 3.6}deg` } as React.CSSProperties}><div className="timer-inner"><span>{running ? 'Em foco' : 'Pronto para começar'}</span><strong>{formatTime(timerSeconds)}</strong><small>sessão de foco</small></div></div><div className="timer-controls"><button className="secondary-button" onClick={reset}>Reiniciar</button><button className="primary-button timer-start" onClick={() => { setRunning(!running); notify(running ? 'Sessão pausada.' : 'Sessão de foco iniciada.'); }}>{running ? 'Pausar' : 'Começar sessão'}</button></div></section><div className="focus-options"><div><span>Duração</span><strong>25 min</strong></div><div><span>Foco registrado</span><strong>{formatDuration(focusSeconds)}</strong></div><div><span>Sessões concluídas</span><strong>{completedSessions}</strong></div></div><section className="section-block"><div className="section-title"><div><span className="eyebrow">Escolha seu ambiente</span><h2>Som para acompanhar</h2></div></div><div className="sound-grid">{soundOptions.map((sound) => <button key={sound.name} className={`sound-card ${selectedSound === sound.name ? 'selected' : ''}`} onClick={() => { setSelectedSound(sound.name); notify(`${sound.name} selecionado.`); }} aria-pressed={selectedSound === sound.name}>{sound.icon}<span>{sound.name}</span><small>{sound.description}</small></button>)}</div></section></>;
+function FocusView({ timerSeconds, focusSeconds, completedSessions, running, kind, settings, setRunning, onSettings, reset, notify }: { timerSeconds: number; focusSeconds: number; completedSessions: number; running: boolean; kind: 'focus' | 'shortBreak' | 'longBreak'; settings: PomodoroSettings; setRunning: (value: boolean) => void; onSettings: (settings: PomodoroSettings) => Promise<void>; reset: () => void; notify: (message: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(settings);
+  const audioRef = useRef<AudioContext | null>(null);
+  const duration = (kind === 'focus' ? settings.focusMinutes : kind === 'shortBreak' ? settings.shortBreakMinutes : settings.longBreakMinutes) * 60;
+  const percent = Math.max(0, ((duration - timerSeconds) / duration) * 100);
+  useEffect(() => { setDraft(settings); }, [settings]);
+  useEffect(() => {
+    if (!running || !settings.soundEnabled) return;
+    const Audio = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Audio) return;
+    const context = new Audio(); audioRef.current = context;
+    const buffer = context.createBuffer(1, context.sampleRate * 2, context.sampleRate);
+    const data = buffer.getChannelData(0); for (let i = 0; i < data.length; i += 1) data[i] = Math.random() * 2 - 1;
+    const source = context.createBufferSource(); source.buffer = buffer; source.loop = true;
+    const filter = context.createBiquadFilter(); filter.type = settings.sound === 'Chuva leve' ? 'bandpass' : settings.sound === 'Café' ? 'lowpass' : 'highpass'; filter.frequency.value = settings.sound === 'Chuva leve' ? 1500 : settings.sound === 'Café' ? 650 : 1100;
+    const gain = context.createGain(); gain.gain.value = settings.sound === 'Café' ? .045 : .09;
+    source.connect(filter).connect(gain).connect(context.destination); source.start();
+    return () => { source.stop(); void context.close(); audioRef.current = null; };
+  }, [running, settings.sound, settings.soundEnabled]);
+  const kindLabel = kind === 'focus' ? 'sessão de foco' : kind === 'shortBreak' ? 'pausa curta' : 'pausa longa';
+  return <><PageHeading eyebrow="Central de foco" title="Presença no agora" action={<button className="soft-pill" onClick={() => setEditing(true)}>Ajustar</button>} /><section className="timer-card"><div className="timer-ring" style={{ '--progress': `${percent * 3.6}deg` } as React.CSSProperties}><div className="timer-inner"><span>{running ? (kind === 'focus' ? 'Em foco' : 'Em pausa') : 'Pronto para começar'}</span><strong>{formatTime(timerSeconds)}</strong><small>{kindLabel}</small></div></div><div className="timer-controls"><button className="secondary-button" onClick={reset}>Reiniciar</button><button className="primary-button timer-start" onClick={() => { setRunning(!running); notify(running ? 'Sessão pausada.' : `${kind === 'focus' ? 'Foco' : 'Pausa'} iniciado.`); }}>{running ? 'Pausar' : kind === 'focus' ? 'Começar foco' : 'Começar pausa'}</button></div></section><div className="focus-options"><div><span>Duração</span><strong>{Math.round(duration / 60)} min</strong></div><div><span>Foco registrado</span><strong>{formatDuration(focusSeconds)}</strong></div><div><span>Sessões concluídas</span><strong>{completedSessions}</strong></div></div><section className="section-block"><div className="section-title"><div><span className="eyebrow">Escolha seu ambiente</span><h2>Som para acompanhar</h2></div><button className="text-button" onClick={() => void onSettings({ ...settings, soundEnabled: !settings.soundEnabled })}>{settings.soundEnabled ? 'Desligar' : 'Ligar'}</button></div><div className="sound-grid">{soundOptions.map((sound) => <button key={sound.name} className={`sound-card ${settings.sound === sound.name ? 'selected' : ''}`} onClick={() => { void onSettings({ ...settings, sound: sound.name, soundEnabled: true }); notify(`${sound.name} selecionado.`); }} aria-pressed={settings.sound === sound.name}>{sound.icon}<span>{sound.name}</span><small>{sound.description}</small></button>)}</div></section>{editing && <div className="modal-backdrop" onClick={() => setEditing(false)}><form className="add-modal pomodoro-modal" onClick={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); void onSettings(draft); setEditing(false); }}><div className="modal-handle" /><h2>Configurar Pomodoro</h2><p>Defina o ritmo que funciona para você.</p><label>Foco (min)<input type="number" min="1" max="120" value={draft.focusMinutes} onChange={(event) => setDraft({ ...draft, focusMinutes: Number(event.target.value) })} /></label><label>Pausa curta (min)<input type="number" min="1" max="120" value={draft.shortBreakMinutes} onChange={(event) => setDraft({ ...draft, shortBreakMinutes: Number(event.target.value) })} /></label><label>Pausa longa (min)<input type="number" min="1" max="120" value={draft.longBreakMinutes} onChange={(event) => setDraft({ ...draft, longBreakMinutes: Number(event.target.value) })} /></label><button className="primary-button" type="submit">Salvar configuração</button></form></div>}</>;
 }
 
-function CommunityView({ notify, onOpen }: { notify: (message: string) => void; onOpen: (title: string, body: string) => void }) {
-  const [communityTab, setCommunityTab] = useState('Para você');
-  const [liked, setLiked] = useState<Record<string, boolean>>({});
-  const posts: { id: string; initial: string; avatar: string; author: string; detail: string; text: string; likes: number; comments: number }[] = [];
-  return <><PageHeading eyebrow="Comunidade" title="Crescer junto é melhor" action={<button className="icon-button" aria-label="Pesquisar comunidade" onClick={() => onOpen('Pesquisar comunidade', 'A busca por pessoas e comunidades ficará disponível quando o cadastro de usuários estiver conectado ao banco de dados.')}>⌕</button>} /><div className="community-tabs">{['Para você', 'Seguindo', 'Desafios'].map((tab) => <button key={tab} className={communityTab === tab ? 'selected' : ''} onClick={() => { setCommunityTab(tab); notify(`Exibindo: ${tab}.`); }} aria-pressed={communityTab === tab}>{tab}</button>)}</div>{posts.map((post) => <div className="feed-card" key={post.id}><div className="post-author"><div className={`avatar ${post.avatar}`}>{post.initial}</div><div><strong>{post.author}</strong><small>{post.detail}</small></div><span className="more">···</span></div><p>{post.text}</p>{post.id === 'marina' ? <div className="post-progress"><div><span>Desafio 7 dias de foco</span><strong>5/7</strong></div><div className="large-progress"><i style={{ width: '71%' }} /></div></div> : <div className="achievement-chip">✦ <span>30 dias em movimento</span></div>}<div className="post-actions"><button onClick={() => { setLiked((current) => ({ ...current, [post.id]: !current[post.id] })); notify(liked[post.id] ? 'Curtida removida.' : 'Publicação curtida.'); }}>{liked[post.id] ? '♥' : '♡'} {post.likes + (liked[post.id] ? 1 : 0)}</button><button onClick={() => onOpen('Comentários', `${post.comments} comentários nesta publicação. A caixa de comentários será conectada quando a comunidade tiver autenticação.`)}>◌ {post.comments} comentários</button><button onClick={() => notify('Link da publicação copiado para compartilhar.')}>↗ Compartilhar</button></div></div>)}</>;
+type CommunityPost = { id: number; body: string; created_at: string; name: string; email: string; likes: number; comments: number; liked: boolean | null };
+type CommunityPerson = { name: string; email: string; following: boolean; followers: number };
+type CommunityComment = { id: number; body: string; created_at: string; name: string; email: string };
+type CommunityMessage = { id: number; body: string; created_at: string; sender_email: string; recipient_email: string; sender_name: string };
+
+function CommunityView({ account, notify }: { account: Account; notify: (message: string) => void }) {
+  const [tab, setTab] = useState<'feed' | 'following' | 'messages'>('feed'); const [posts, setPosts] = useState<CommunityPost[]>([]); const [people, setPeople] = useState<CommunityPerson[]>([]); const [query, setQuery] = useState(''); const [postText, setPostText] = useState(''); const [commentFor, setCommentFor] = useState<number | null>(null); const [commentText, setCommentText] = useState(''); const [comments, setComments] = useState<CommunityComment[]>([]); const [talkingTo, setTalkingTo] = useState<CommunityPerson | null>(null); const [messages, setMessages] = useState<CommunityMessage[]>([]); const [messageText, setMessageText] = useState(''); const [error, setError] = useState('');
+  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${account.sessionToken ?? ''}` };
+  const call = async (url: string, init?: RequestInit) => { const response = await fetch(url, { ...init, headers: { ...headers, ...(init?.headers ?? {}) } }); const data = await response.json(); if (!response.ok) throw new Error(data.error ?? 'Não foi possível concluir esta ação.'); return data; };
+  const loadPosts = async (following = false) => { try { const data = await call(`/api/social?mode=feed&following=${following ? '1' : '0'}`); setPosts(data.posts); setError(''); } catch (err) { setError(err instanceof Error ? err.message : 'Não foi possível carregar.'); } };
+  const loadPeople = async (value = query) => { try { const data = await call(`/api/social?mode=people&q=${encodeURIComponent(value)}`); setPeople(data.people); } catch (err) { setError(err instanceof Error ? err.message : 'Não foi possível carregar.'); } };
+  useEffect(() => { void loadPosts(); void loadPeople(''); }, []);
+  const send = async (action: string, values: Record<string, unknown>) => call('/api/social', { method: 'POST', body: JSON.stringify({ action, ...values }) });
+  const openComments = async (postId: number) => { setCommentFor(postId); try { const data = await call(`/api/social?mode=comments&post=${postId}`); setComments(data.comments); } catch (err) { setError(err instanceof Error ? err.message : 'Não foi possível carregar comentários.'); } };
+  const openMessages = async (person: CommunityPerson) => { setTalkingTo(person); setTab('messages'); try { const data = await call(`/api/social?mode=messages&with=${encodeURIComponent(person.email)}`); setMessages(data.messages); } catch (err) { setError(err instanceof Error ? err.message : 'Não foi possível abrir a conversa.'); } };
+  return <><PageHeading eyebrow="Comunidade" title="Crescer junto é melhor" action={<button className="icon-button" aria-label="Atualizar comunidade" onClick={() => void loadPosts(tab === 'following')}>↻</button>} /><div className="community-tabs">{[['feed','Para você'],['following','Seguindo'],['messages','Conversas']].map(([id,label]) => <button key={id} className={tab === id ? 'selected' : ''} onClick={() => { setTab(id as typeof tab); if (id === 'feed') void loadPosts(); if (id === 'following') void loadPosts(true); }} aria-pressed={tab === id}>{label}</button>)}</div>{error && <p className="auth-error">{error}</p>}<section className="people-card"><input value={query} onChange={(event) => { setQuery(event.target.value); void loadPeople(event.target.value); }} placeholder="Buscar pessoas por nome ou e-mail" aria-label="Buscar pessoas" />{query && <div className="people-list">{people.map((person) => <div className="person-row" key={person.email}><div><strong>{person.name}</strong><small>{person.followers} seguidores</small></div><button className="text-button" onClick={() => void openMessages(person)}>Mensagem</button><button className="follow-button" onClick={async () => { await send(person.following ? 'unfollow' : 'follow', { email: person.email }); await loadPeople(); notify(person.following ? 'Você deixou de seguir esta pessoa.' : 'Agora vocês estão conectados.'); }}>{person.following ? 'Seguindo' : 'Seguir'}</button></div>)}</div>}</section>{tab !== 'messages' && <><form className="composer" onSubmit={async (event) => { event.preventDefault(); if (!postText.trim()) return; await send('post', { body: postText }); setPostText(''); await loadPosts(tab === 'following'); notify('Publicação compartilhada.'); }}><textarea value={postText} onChange={(event) => setPostText(event.target.value)} maxLength={500} placeholder="Compartilhe uma pequena vitória ou ideia…" /><button className="primary-button" type="submit">Publicar</button></form>{posts.length ? posts.map((post) => <article className="feed-card" key={post.id}><div className="post-author"><div className="avatar avatar-blue">{post.name.charAt(0).toUpperCase()}</div><div><strong>{post.name}</strong><small>{new Date(post.created_at).toLocaleString('pt-BR')}</small></div></div><p>{post.body}</p><div className="post-actions"><button onClick={async () => { await send(post.liked ? 'unlike' : 'like', { postId: post.id }); await loadPosts(tab === 'following'); }}>{post.liked ? '♥' : '♡'} {post.likes}</button><button onClick={() => void openComments(post.id)}>◌ {post.comments} comentários</button><button onClick={() => { const person = people.find((item) => item.email === post.email) ?? { name: post.name, email: post.email, following: false, followers: 0 }; void openMessages(person); }}>✉ Mensagem</button></div>{commentFor === post.id && <div className="comments"><div>{comments.map((comment) => <p key={comment.id}><strong>{comment.name}</strong> {comment.body}</p>)}</div><form onSubmit={async (event) => { event.preventDefault(); if (!commentText.trim()) return; await send('comment', { postId: post.id, body: commentText }); setCommentText(''); await openComments(post.id); await loadPosts(tab === 'following'); }}><input value={commentText} onChange={(event) => setCommentText(event.target.value)} maxLength={300} placeholder="Escreva um comentário" /><button type="submit">Enviar</button></form></div>}</article>) : <p className="empty-state">Ainda não há publicações aqui. Que tal abrir a conversa?</p>}</>}{tab === 'messages' && <section className="messages-card">{!talkingTo ? <><p className="empty-state">Busque uma pessoa acima e toque em Mensagem para começar.</p>{people.map((person) => <button className="person-row" key={person.email} onClick={() => void openMessages(person)}><div><strong>{person.name}</strong><small>{person.email}</small></div><span>›</span></button>)}</> : <><div className="message-head"><button className="text-button" onClick={() => setTalkingTo(null)}>‹ Voltar</button><strong>{talkingTo.name}</strong></div><div className="message-list">{messages.map((message) => <p className={message.sender_email === account.email ? 'mine' : ''} key={message.id}>{message.body}</p>)}</div><form className="message-compose" onSubmit={async (event) => { event.preventDefault(); if (!messageText.trim()) return; await send('message', { email: talkingTo.email, body: messageText }); setMessageText(''); await openMessages(talkingTo); }}><input value={messageText} onChange={(event) => setMessageText(event.target.value)} maxLength={1000} placeholder="Mensagem" /><button type="submit">Enviar</button></form></>}</section>}</>;
 }
 
 function ProfileView({ account, completed, focusSeconds, completedSessions, onOpen, onLogout }: { account: Account; completed: number; focusSeconds: number; completedSessions: number; onOpen: (title: string, body: string) => void; onLogout: () => void }) {
