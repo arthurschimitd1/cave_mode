@@ -5,6 +5,15 @@ export const metadata: Metadata = {
   title: 'Cave — uma tarefa de cada vez',
   description: 'Organize seu tempo, construa sua evolução.',
   manifest: '/manifest.webmanifest',
+  icons: {
+    icon: [{ url: '/icon-512.png', type: 'image/png', sizes: '512x512' }],
+    apple: [{ url: '/icon-192.png', type: 'image/png', sizes: '192x192' }],
+  },
+  appleWebApp: {
+    capable: true,
+    title: 'Cave',
+    statusBarStyle: 'black-translucent',
+  },
 };
 
 export const viewport: Viewport = {

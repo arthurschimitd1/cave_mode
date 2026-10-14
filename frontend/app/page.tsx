@@ -170,7 +170,7 @@ export default function Home() {
     <main className="app-shell">
       <div className="grain" />
       <header className="topbar">
-        <button className="brand brand-button" onClick={() => setActiveTab('today')} aria-label="Ir para Hoje"><span className="brand-mark">✳</span><span>cave</span></button>
+        <button className="brand brand-button" onClick={() => setActiveTab('today')} aria-label="Ir para Hoje"><img className="brand-mark" src="/cave-logo.jpeg" alt="" /><span>cave</span></button>
         <button className="icon-button" aria-label="Notificações" onClick={() => { const next = tasks.find((task) => !task.done); openPanel('Notificações', next ? `Próxima tarefa: ${next.title}.` : 'Não há tarefas pendentes.'); }}>♢<span className="notification-dot" /></button>
       </header>
 
@@ -260,7 +260,7 @@ function AuthFlow({ accounts, onAuthenticated }: { accounts: Account[]; onAuthen
 }
 
 function AuthBrand() {
-  return <div className="auth-brand"><span className="brand-mark">✳</span><strong>cave</strong></div>;
+  return <div className="auth-brand"><img className="brand-mark" src="/cave-logo.jpeg" alt="" /><strong>cave</strong></div>;
 }
 
 function PinKeypad({ pin, onChange }: { pin: string; onChange: (pin: string) => void }) {
