@@ -97,8 +97,12 @@ export default function Home() {
     if (savedSession) {
       try {
         const currentAccount = JSON.parse(savedSession) as Account;
-        setAccount(currentAccount);
-        setAuthenticated(true);
+        if (currentAccount.sessionToken) {
+          setAccount(currentAccount);
+          setAuthenticated(true);
+        } else {
+          window.localStorage.removeItem('cave-session-v1');
+        }
       } catch {
         window.localStorage.removeItem('cave-session-v1');
       }
