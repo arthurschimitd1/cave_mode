@@ -163,7 +163,14 @@ export default function Home() {
     try {
       const [taskResponse, goalResponse, historyResponse] = await Promise.all([fetch('/api/workspace?mode=tasks', { headers }), fetch('/api/workspace?mode=goals', { headers }), fetch('/api/workspace?mode=history', { headers })]);
       const [taskData, goalData, historyData] = await Promise.all([taskResponse.json(), goalResponse.json(), historyResponse.json()]) as [{ tasks?: Task[] }, { goals?: Goal[] }, { history?: { day: string; minutes: number }[] }];
-      if (taskResponse.ok) setTasks((taskData.tasks ?? []).map((task) => ({ ...task, meta: task.dueAt ? new Date(task.dueAt).toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Sem horário definido', color: task.priority === 'high' ? 'peach' : task.priority === 'low' ? 'mint' : 'sky' })));
+      if (taskResponse.ok) {
+        const remoteTasks = taskData.tasks ?? [];
+        if (!remoteTasks.length && tasks.length) {
+          await Promise.all(tasks.map((task) => workspace('createTask', { title: task.title, note: task.note ?? '', dueAt: task.dueAt ?? '', repeat: task.repeat ?? 'none', priority: task.priority ?? 'medium', estimateMinutes: task.estimateMinutes ?? 25, routine: task.routine })));
+          return void loadWorkspace();
+        }
+        setTasks(remoteTasks.map((task) => ({ ...task, meta: task.dueAt ? new Date(task.dueAt).toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Sem horário definido', color: task.priority === 'high' ? 'peach' : task.priority === 'low' ? 'mint' : 'sky' })));
+      }
       if (goalResponse.ok) setGoals(goalData.goals ?? []);
       if (historyResponse.ok) setFocusHistory(historyData.history ?? []);
     } catch { notify('Não foi possível sincronizar agora. Seus dados locais continuam seguros.'); }
