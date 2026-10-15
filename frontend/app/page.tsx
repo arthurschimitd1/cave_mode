@@ -122,7 +122,6 @@ export default function Home() {
   const [dailyCheckIn, setDailyCheckIn] = useState<DailyCheckIn>(null);
   const [weeklyPlan, setWeeklyPlan] = useState<WeeklyPlan>(null);
   const [weeklyRoutineCompletions, setWeeklyRoutineCompletions] = useState(0);
-  const [celebratingRoutine, setCelebratingRoutine] = useState(false);
   const [focusHistory, setFocusHistory] = useState<{ day: string; minutes: number }[]>([]);
   const [subjects, setSubjects] = useState<{ id: number; name: string; topics: { id: number; name: string; done: boolean }[] }[]>([]);
   const remindedTasks = useRef<Set<string>>(new Set());
@@ -333,8 +332,6 @@ export default function Home() {
       const routineResult = result as { createdRoutineCompletion?: boolean; weeklyRoutineCompletions?: number };
       if (typeof routineResult.weeklyRoutineCompletions === 'number') setWeeklyRoutineCompletions(routineResult.weeklyRoutineCompletions);
       if (routineResult.createdRoutineCompletion) {
-        setCelebratingRoutine(true);
-        window.setTimeout(() => setCelebratingRoutine(false), 2600);
         notify('Rotina completa! Você ganhou mais um dia na semana.');
       }
     }).catch((error) => { void loadWorkspace(); notify(error instanceof Error ? error.message : 'Não foi possível salvar a tarefa.'); });
@@ -423,7 +420,6 @@ export default function Home() {
   return (
     <main className={`app-shell ${timerRunning ? 'focus-mode' : ''}`}>
       <div className="grain" />
-      {celebratingRoutine && <RoutineConfetti />}
       <header className="topbar">
         <button className="brand brand-button" onClick={() => setActiveTab('today')} aria-label="Ir para Hoje"><img className="brand-mark" src="/cave-logo.jpeg" alt="" /><span>cave</span></button>
         <button className="icon-button" aria-label="Notificações" onClick={() => { const next = tasks.find((task) => !task.done); openPanel('Notificações', next ? `Próxima tarefa: ${next.title}.` : 'Não há tarefas pendentes.'); }}>♢<span className="notification-dot" /></button>
@@ -726,10 +722,6 @@ function futureGoalDuration(createdAt: string, completedAt: string) {
 
 function RoutineWeekCard({ count }: { count: number }) {
   return <section className="routine-week-card"><div><span className="eyebrow">Constância</span><h2>Rotinas completas</h2><p>Você concluiu sua rotina em <strong>{count} {count === 1 ? 'dia' : 'dias'}</strong> nesta semana.</p></div><strong className="routine-week-total">{count}<small>/7</small></strong></section>;
-}
-
-function RoutineConfetti() {
-  return <div className="routine-confetti" aria-hidden="true">{Array.from({ length: 34 }, (_, index) => <i key={index} style={{ '--x': `${(index * 29) % 100}%`, '--delay': `${(index % 7) * 45}ms`, '--turn': `${index % 2 ? 220 : -220}deg` } as React.CSSProperties} />)}</div>;
 }
 
 function DataBackup({ account, notify }: { account: Account; notify: (message: string) => void }) {
