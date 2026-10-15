@@ -46,6 +46,8 @@ export async function POST(request: NextRequest) {
     if (action === 'createSubject') { const name=String(data.name??'').trim(); if(!name) return fail('Informe a matéria.'); await db().query('INSERT INTO cave_study_subjects (email,name) VALUES ($1,$2)',[email,name]); return NextResponse.json({ok:true},{status:201}); }
     if (action === 'createTopic') { const name=String(data.name??'').trim(); const subjectId=Number(data.subjectId); if(!name||!subjectId) return fail('Informe o assunto.'); await db().query('INSERT INTO cave_study_topics (subject_id,name) SELECT $1,$2 WHERE EXISTS(SELECT 1 FROM cave_study_subjects WHERE id=$1 AND email=$3)',[subjectId,name,email]); return NextResponse.json({ok:true},{status:201}); }
     if (action === 'toggleTopic') { await db().query('UPDATE cave_study_topics SET done=NOT done WHERE id=$1 AND EXISTS(SELECT 1 FROM cave_study_subjects WHERE id=cave_study_topics.subject_id AND email=$2)',[Number(data.topicId),email]); return NextResponse.json({ok:true}); }
+    if (action === 'deleteSubject') { await db().query('DELETE FROM cave_study_subjects WHERE id=$1 AND email=$2',[Number(data.subjectId),email]); return NextResponse.json({ok:true}); }
+    if (action === 'deleteTopic') { await db().query('DELETE FROM cave_study_topics WHERE id=$1 AND EXISTS(SELECT 1 FROM cave_study_subjects WHERE id=cave_study_topics.subject_id AND email=$2)',[Number(data.topicId),email]); return NextResponse.json({ok:true}); }
     return fail('Ação inválida.');
   } catch (error) { console.error('Workspace Cave:', error); return fail('Não foi possível salvar seus dados.',500); }
 }

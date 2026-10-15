@@ -70,6 +70,7 @@ export default function Home() {
   const [authenticated, setAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [tasks, setTasks] = useState(initialTasks);
+  const tasksRef = useRef<Task[]>(initialTasks);
   const [pomodoro, setPomodoro] = useState<PomodoroSettings>(defaultPomodoro);
   const [timerSeconds, setTimerSeconds] = useState(25 * 60);
   const [timerKind, setTimerKind] = useState<'focus' | 'shortBreak' | 'longBreak'>('focus');
@@ -95,6 +96,8 @@ export default function Home() {
   const routineTasks = tasks.filter((task) => !task.planned);
   const completed = routineTasks.filter((task) => task.done).length;
   const progress = routineTasks.length ? Math.round((completed / routineTasks.length) * 100) : 0;
+
+  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
 
   useEffect(() => {
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => undefined);
@@ -282,17 +285,19 @@ export default function Home() {
 
   function reorderTask(sourceId: number, targetId: number) {
     if (sourceId === targetId) return;
-    setTasks((current) => {
-      const sourceIndex = current.findIndex((task) => task.id === sourceId);
-      const targetIndex = current.findIndex((task) => task.id === targetId);
-      if (sourceIndex < 0 || targetIndex < 0) return current;
-      const next = [...current];
+    const current = tasksRef.current;
+    const sourceIndex = current.findIndex((task) => task.id === sourceId);
+    const targetIndex = current.findIndex((task) => task.id === targetId);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    const next = [...current];
       const [source] = next.splice(sourceIndex, 1);
-      source.routine = current[targetIndex].routine;
-      next.splice(targetIndex, 0, source);
-      return next;
-    });
-    window.setTimeout(() => { const items = tasks.map((task, index) => ({ id: task.id, routine: task.routine, position: index })); void workspace('reorderTasks', { items }).catch(() => void loadWorkspace()); }, 0);
+      const targetRoutine = current[targetIndex].routine;
+      const moved = { ...source, routine: targetRoutine };
+      next.splice(targetIndex, 0, moved);
+    const ordered = next.map((task, index) => ({ ...task, position: index }));
+    tasksRef.current = ordered;
+    setTasks(ordered);
+    void workspace('reorderTasks', { items: ordered.map((task) => ({ id: task.id, routine: task.routine, position: task.position })) }).catch(() => void loadWorkspace());
   }
 
   function finishFocus() {
@@ -468,8 +473,10 @@ function TodayView({ dateLabel, tasks, completed, progress, focusSeconds, onTogg
 function RoutineGroup({ routine, tasks, onToggle, onDelete, onReorder }: { routine: Routine; tasks: Task[]; onToggle: (id: number) => void; onDelete: (id: number) => void; onReorder: (source: number, target: number) => void }) {
   const [dragging, setDragging] = useState<number | null>(null);
   const draggingId = useRef<number | null>(null);
+  const lastTargetId = useRef<number | null>(null);
   const label = routine === 'morning' ? 'Rotina matinal' : routine === 'afternoon' ? 'Rotina da tarde' : 'Rotina da noite';
-  return <section className="routine-group"><h3>{label}<small>{tasks.length} {tasks.length === 1 ? 'tarefa' : 'tarefas'}</small></h3><div className="task-list">{tasks.length ? tasks.map((task) => <div className={`task-row ${task.done ? 'is-done' : ''} ${dragging === task.id ? 'dragging' : ''}`} data-task-id={task.id} key={task.id}><button className="drag-handle" type="button" aria-label={`Segurar para mover ${task.title}`} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); draggingId.current = task.id; setDragging(task.id); }} onPointerMove={(event) => { if (draggingId.current !== task.id) return; const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-task-id]'); const targetId = Number(target?.dataset.taskId); if (targetId) onReorder(task.id, targetId); }} onPointerUp={() => { draggingId.current = null; setDragging(null); }} onPointerCancel={() => { draggingId.current = null; setDragging(null); }}>⠿</button><button className="task-main" onClick={() => onToggle(task.id)} aria-pressed={task.done}><span className={`task-check ${task.done ? 'checked' : ''}`}>{task.done ? '✓' : ''}</span><span className="task-copy"><strong>{task.title}</strong><small>{task.meta}</small></span><span className={`task-color ${task.color}`} /></button><button className="task-delete" type="button" aria-label={`Excluir ${task.title}`} onClick={() => onDelete(task.id)}>×</button></div>) : <p className="routine-empty">Nenhuma tarefa nesta rotina.</p>}</div></section>;
+  const stopDragging = () => { draggingId.current = null; lastTargetId.current = null; setDragging(null); };
+  return <section className="routine-group"><h3>{label}<small>{tasks.length} {tasks.length === 1 ? 'tarefa' : 'tarefas'}</small></h3><div className="task-list">{tasks.length ? tasks.map((task) => <div className={`task-row ${task.done ? 'is-done' : ''} ${dragging === task.id ? 'dragging' : ''}`} data-task-id={task.id} key={task.id}><button className="drag-handle" type="button" aria-label={`Segurar para mover ${task.title}`} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); draggingId.current = task.id; lastTargetId.current = task.id; setDragging(task.id); }} onPointerMove={(event) => { if (draggingId.current !== task.id) return; const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-task-id]'); const targetId = Number(target?.dataset.taskId); if (targetId && targetId !== lastTargetId.current) { lastTargetId.current = targetId; onReorder(task.id, targetId); } }} onPointerUp={stopDragging} onPointerCancel={stopDragging}>⠿</button><button className="task-main" onClick={() => onToggle(task.id)} aria-pressed={task.done}><span className={`task-check ${task.done ? 'checked' : ''}`}>{task.done ? '✓' : ''}</span><span className="task-copy"><strong>{task.title}</strong><small>{task.meta}</small></span><span className={`task-color ${task.color}`} /></button><button className="task-delete" type="button" aria-label={`Excluir ${task.title}`} onClick={() => onDelete(task.id)}>×</button></div>) : <p className="routine-empty">Nenhuma tarefa nesta rotina.</p>}</div></section>;
 }
 
 function LegacyPlanView({ tasks, onAdd, onOpenTask }: { tasks: Task[]; onAdd: () => void; onOpenTask: (task: Task) => void }) {
@@ -560,13 +567,19 @@ function CommunityCore({ account, notify }: { account: Account; notify: (message
 
 function StudiesView({ subjects, onSave, notify }: { subjects: { id: number; name: string; topics: { id: number; name: string; done: boolean }[] }[]; onSave: (action: string, data: Record<string, unknown>) => Promise<void>; notify: (message: string) => void }) {
   const [subject, setSubject] = useState(''); const [topic, setTopic] = useState<Record<number, string>>({});
-  return <><PageHeading eyebrow="Estudos" title="Aprenda no seu ritmo" /><form className="study-add" onSubmit={async (event) => { event.preventDefault(); if (!subject.trim()) return; await onSave('createSubject', { name: subject }); setSubject(''); notify('Matéria adicionada.'); }}><input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="Nova matéria: ex. Matemática" /><button type="submit">Adicionar</button></form>{subjects.length ? subjects.map((item) => <section className="study-card" key={item.id}><h2>{item.name}</h2><div>{item.topics.map((itemTopic) => <button className={itemTopic.done ? 'done' : ''} key={itemTopic.id} onClick={async () => { await onSave('toggleTopic', { topicId: itemTopic.id }); }}><span>{itemTopic.done ? '✓' : ''}</span>{itemTopic.name}</button>)}</div><form onSubmit={async (event) => { event.preventDefault(); const name = topic[item.id]?.trim(); if (!name) return; await onSave('createTopic', { subjectId: item.id, name }); setTopic({ ...topic, [item.id]: '' }); }}><input value={topic[item.id] ?? ''} onChange={(event) => setTopic({ ...topic, [item.id]: event.target.value })} placeholder="Adicionar assunto" /><button type="submit">+</button></form></section>) : <p className="empty-state">Adicione uma matéria e organize os assuntos que quer estudar.</p>}</>;
+  return <><PageHeading eyebrow="Estudos" title="Aprenda no seu ritmo" /><form className="study-add" onSubmit={async (event) => { event.preventDefault(); if (!subject.trim()) return; await onSave('createSubject', { name: subject }); setSubject(''); notify('Matéria adicionada.'); }}><input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="Nova matéria: ex. Matemática" /><button type="submit">Adicionar</button></form>{subjects.length ? subjects.map((item) => { const completed = item.topics.filter((itemTopic) => itemTopic.done).length; const progress = item.topics.length ? completed / item.topics.length * 100 : 0; return <section className="study-card" key={item.id}><div className="study-head"><div><h2>{item.name}</h2><small>{completed}/{item.topics.length || 0} assuntos concluídos</small></div><button className="delete-study" aria-label={`Excluir ${item.name}`} onClick={async () => { await onSave('deleteSubject', { subjectId: item.id }); notify('Matéria excluída.'); }}>×</button></div><div className="study-progress"><i style={{ width: `${progress}%` }} /></div><div>{item.topics.map((itemTopic) => <div className={`study-topic ${itemTopic.done ? 'done' : ''}`} key={itemTopic.id}><button onClick={async () => { await onSave('toggleTopic', { topicId: itemTopic.id }); }}><span>{itemTopic.done ? '✓' : ''}</span>{itemTopic.name}</button><button className="delete-study" aria-label={`Excluir ${itemTopic.name}`} onClick={async () => { await onSave('deleteTopic', { topicId: itemTopic.id }); }}>×</button></div>)}</div><form onSubmit={async (event) => { event.preventDefault(); const name = topic[item.id]?.trim(); if (!name) return; await onSave('createTopic', { subjectId: item.id, name }); setTopic({ ...topic, [item.id]: '' }); }}><input value={topic[item.id] ?? ''} onChange={(event) => setTopic({ ...topic, [item.id]: event.target.value })} placeholder="Adicionar assunto" /><button type="submit">+</button></form></section>; }) : <p className="empty-state">Adicione uma matéria e organize os assuntos que quer estudar.</p>}</>;
 }
 
 function CommunityView({ account, notify }: { account: Account; notify: (message: string) => void }) {
-  const [showChallenges, setShowChallenges] = useState(false);
-  if (showChallenges) return <ChallengeView account={account} onBack={() => setShowChallenges(false)} notify={notify} />;
-  return <><CommunityCore account={account} notify={notify} /><button className="challenge-entry" onClick={() => setShowChallenges(true)}>✦ Ver desafios da comunidade <span>›</span></button></>;
+  const [view, setView] = useState<'feed' | 'people' | 'challenges'>('feed');
+  return <><div className="community-hub-tabs">{[['feed','Feed'],['people','Pessoas'],['challenges','Desafios']].map(([id,label]) => <button key={id} className={view === id ? 'selected' : ''} onClick={() => setView(id as typeof view)}>{label}</button>)}</div>{view === 'feed' && <CommunityCore account={account} notify={notify} />}{view === 'people' && <PeopleView account={account} notify={notify} />}{view === 'challenges' && <ChallengeView account={account} onBack={() => setView('feed')} notify={notify} />}</>;
+}
+
+function PeopleView({ account, notify }: { account: Account; notify: (message: string) => void }) {
+  const [people, setPeople] = useState<CommunityPerson[]>([]); const [query, setQuery] = useState(''); const [error, setError] = useState('');
+  const load = async (value = '') => { try { const response = await fetch(`/api/social?mode=people&q=${encodeURIComponent(value)}`, { headers: { Authorization: `Bearer ${account.sessionToken ?? ''}` } }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setPeople(data.people); } catch (err) { setError(err instanceof Error ? err.message : 'Não foi possível carregar pessoas.'); } };
+  useEffect(() => { void load(); }, []);
+  return <><PageHeading eyebrow="Comunidade" title="Encontre sua turma" />{error && <p className="auth-error">{error}</p>}<section className="people-card people-explorer"><input autoFocus value={query} onChange={(event) => { setQuery(event.target.value); void load(event.target.value); }} placeholder="Buscar pelo nome ou e-mail" />{people.length ? people.map((person) => <div className="person-row" key={person.email}><div className="avatar avatar-blue">{person.name.charAt(0).toUpperCase()}</div><div><strong>{person.name}</strong><small>{person.followers} seguidores</small></div><button className="follow-button" onClick={async () => { const response = await fetch('/api/social', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${account.sessionToken ?? ''}` }, body: JSON.stringify({ action: person.following ? 'unfollow' : 'follow', email: person.email }) }); if (!response.ok) return setError('Não foi possível atualizar o vínculo.'); await load(query); notify(person.following ? 'Você deixou de seguir esta pessoa.' : 'Agora vocês estão conectados.'); }}>{person.following ? 'Seguindo' : 'Seguir'}</button></div>) : <p className="empty-state">Nenhuma pessoa encontrada ainda.</p>}</section></>;
 }
 
 function ChallengeView({ account, onBack, notify }: { account: Account; onBack: () => void; notify: (message: string) => void }) {
