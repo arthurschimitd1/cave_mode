@@ -121,6 +121,8 @@ export default function Home() {
   const [futureGoals, setFutureGoals] = useState<FutureGoal[]>([]);
   const [dailyCheckIn, setDailyCheckIn] = useState<DailyCheckIn>(null);
   const [weeklyPlan, setWeeklyPlan] = useState<WeeklyPlan>(null);
+  const [weeklyRoutineCompletions, setWeeklyRoutineCompletions] = useState(0);
+  const [celebratingRoutine, setCelebratingRoutine] = useState(false);
   const [focusHistory, setFocusHistory] = useState<{ day: string; minutes: number }[]>([]);
   const [subjects, setSubjects] = useState<{ id: number; name: string; topics: { id: number; name: string; done: boolean }[] }[]>([]);
   const remindedTasks = useRef<Set<string>>(new Set());
@@ -224,8 +226,8 @@ export default function Home() {
     if (!account?.sessionToken) return;
     const headers = { Authorization: `Bearer ${account.sessionToken}` };
     try {
-      const [taskResponse, goalResponse, futureGoalResponse, historyResponse, studyResponse, checkInResponse, weeklyPlanResponse] = await Promise.all([fetch('/api/workspace?mode=tasks', { headers }), fetch('/api/workspace?mode=goals', { headers }), fetch('/api/workspace?mode=future-goals', { headers }), fetch('/api/workspace?mode=history', { headers }), fetch('/api/workspace?mode=studies', { headers }), fetch('/api/workspace?mode=check-in', { headers }), fetch('/api/workspace?mode=weekly-plan', { headers })]);
-      const [taskData, goalData, futureGoalData, historyData, studyData, checkInData, weeklyPlanData] = await Promise.all([taskResponse.json(), goalResponse.json(), futureGoalResponse.json(), historyResponse.json(), studyResponse.json(), checkInResponse.json(), weeklyPlanResponse.json()]) as [{ tasks?: Task[] }, { goals?: Goal[] }, { futureGoals?: FutureGoal[] }, { history?: { day: string; minutes: number }[] }, { subjects?: typeof subjects }, { checkIn?: DailyCheckIn }, { weeklyPlan?: WeeklyPlan }];
+      const [taskResponse, goalResponse, futureGoalResponse, historyResponse, studyResponse, checkInResponse, weeklyPlanResponse, routineSummaryResponse] = await Promise.all([fetch('/api/workspace?mode=tasks', { headers }), fetch('/api/workspace?mode=goals', { headers }), fetch('/api/workspace?mode=future-goals', { headers }), fetch('/api/workspace?mode=history', { headers }), fetch('/api/workspace?mode=studies', { headers }), fetch('/api/workspace?mode=check-in', { headers }), fetch('/api/workspace?mode=weekly-plan', { headers }), fetch('/api/workspace?mode=routine-summary', { headers })]);
+      const [taskData, goalData, futureGoalData, historyData, studyData, checkInData, weeklyPlanData, routineSummaryData] = await Promise.all([taskResponse.json(), goalResponse.json(), futureGoalResponse.json(), historyResponse.json(), studyResponse.json(), checkInResponse.json(), weeklyPlanResponse.json(), routineSummaryResponse.json()]) as [{ tasks?: Task[] }, { goals?: Goal[] }, { futureGoals?: FutureGoal[] }, { history?: { day: string; minutes: number }[] }, { subjects?: typeof subjects }, { checkIn?: DailyCheckIn }, { weeklyPlan?: WeeklyPlan }, { weeklyRoutineCompletions?: number }];
       if (taskResponse.ok) {
         const remoteTasks = taskData.tasks ?? [];
         if (!remoteTasks.length && tasks.length) {
@@ -240,6 +242,7 @@ export default function Home() {
       if (studyResponse.ok) setSubjects(studyData.subjects ?? []);
       if (checkInResponse.ok) setDailyCheckIn(checkInData.checkIn ?? null);
       if (weeklyPlanResponse.ok) setWeeklyPlan(weeklyPlanData.weeklyPlan ?? null);
+      if (routineSummaryResponse.ok) setWeeklyRoutineCompletions(routineSummaryData.weeklyRoutineCompletions ?? 0);
     } catch { notify('Não foi possível sincronizar agora. Seus dados locais continuam seguros.'); }
   };
   useEffect(() => { void loadWorkspace(); }, [account?.sessionToken]);
@@ -326,7 +329,15 @@ export default function Home() {
     const task = tasks.find((item) => item.id === id);
     setTasks((current) => current.map((item) => item.id === id ? { ...item, done: !item.done } : item));
     if (task) notify(task.done ? 'Tarefa reaberta.' : 'Tarefa concluída. Bom ritmo!');
-    void workspace('toggleTask', { id }).catch((error) => notify(error instanceof Error ? error.message : 'Não foi possível salvar a tarefa.'));
+    void workspace('toggleTask', { id }).then((result) => {
+      const routineResult = result as { createdRoutineCompletion?: boolean; weeklyRoutineCompletions?: number };
+      if (typeof routineResult.weeklyRoutineCompletions === 'number') setWeeklyRoutineCompletions(routineResult.weeklyRoutineCompletions);
+      if (routineResult.createdRoutineCompletion) {
+        setCelebratingRoutine(true);
+        window.setTimeout(() => setCelebratingRoutine(false), 2600);
+        notify('Rotina completa! Você ganhou mais um dia na semana.');
+      }
+    }).catch((error) => { void loadWorkspace(); notify(error instanceof Error ? error.message : 'Não foi possível salvar a tarefa.'); });
   }
 
   async function addTask(event: React.FormEvent) {
@@ -412,6 +423,7 @@ export default function Home() {
   return (
     <main className={`app-shell ${timerRunning ? 'focus-mode' : ''}`}>
       <div className="grain" />
+      {celebratingRoutine && <RoutineConfetti />}
       <header className="topbar">
         <button className="brand brand-button" onClick={() => setActiveTab('today')} aria-label="Ir para Hoje"><img className="brand-mark" src="/cave-logo.jpeg" alt="" /><span>cave</span></button>
         <button className="icon-button" aria-label="Notificações" onClick={() => { const next = tasks.find((task) => !task.done); openPanel('Notificações', next ? `Próxima tarefa: ${next.title}.` : 'Não há tarefas pendentes.'); }}>♢<span className="notification-dot" /></button>
@@ -423,7 +435,7 @@ export default function Home() {
         {activeTab === 'focus' && <FocusView timerSeconds={timerSeconds} focusSeconds={focusSeconds} completedSessions={completedSessions} running={timerRunning} kind={timerKind} settings={pomodoro} setRunning={setTimerRunning} onSettings={async (next) => { setPomodoro(next); if (account?.sessionToken) await fetch('/api/pomodoro', { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${account.sessionToken}` }, body: JSON.stringify(next) }); notify('Pomodoro atualizado.'); }} reset={() => { setTimerRunning(false); setTimerSeconds((timerKind === 'focus' ? pomodoro.focusMinutes : timerKind === 'shortBreak' ? pomodoro.shortBreakMinutes : pomodoro.longBreakMinutes) * 60); notify('Cronômetro reiniciado.'); }} notify={notify} />}
         {activeTab === 'studies' && account && <StudiesView subjects={subjects} onSave={async (action, data) => { await workspace(action, data); await loadWorkspace(); }} notify={notify} />}
         {activeTab === 'community' && account && <CommunityView account={account} notify={notify} onSessionExpired={() => { setTimerRunning(false); setAccount(null); setAuthenticated(false); setActiveTab('today'); }} />}
-        {activeTab === 'profile' && account && <><ProfileView account={account} completed={completed} focusSeconds={focusSeconds} completedSessions={completedSessions} goals={goals} futureGoals={futureGoals} history={focusHistory} onCreateGoal={async (title, target, period) => { await workspace('createGoal', { title, target, period }); await loadWorkspace(); notify('Meta criada.'); }} onCreateFutureGoal={async (title, timeframeMonths, nextStep) => { await workspace('createFutureGoal', { title, timeframeMonths, nextStep }); await loadWorkspace(); notify('Meta adicionada à sua visão de futuro.'); }} onCompleteFutureGoal={async (id) => { await workspace('completeFutureGoal', { id }); await loadWorkspace(); notify('Meta marcada como realizada.'); }} onOpen={openPanel} onLogout={logout} /><DataBackup account={account} notify={notify} /></>}
+        {activeTab === 'profile' && account && <><ProfileView account={account} completed={completed} focusSeconds={focusSeconds} completedSessions={completedSessions} goals={goals} futureGoals={futureGoals} history={focusHistory} onCreateGoal={async (title, target, period) => { await workspace('createGoal', { title, target, period }); await loadWorkspace(); notify('Meta criada.'); }} onCreateFutureGoal={async (title, timeframeMonths, nextStep) => { await workspace('createFutureGoal', { title, timeframeMonths, nextStep }); await loadWorkspace(); notify('Meta adicionada à sua visão de futuro.'); }} onCompleteFutureGoal={async (id) => { await workspace('completeFutureGoal', { id }); await loadWorkspace(); notify('Meta marcada como realizada.'); }} onOpen={openPanel} onLogout={logout} /><RoutineWeekCard count={weeklyRoutineCompletions} /><DataBackup account={account} notify={notify} /></>}
       </div>
 
       <nav className="bottom-nav" aria-label="Navegação principal">
@@ -710,6 +722,14 @@ function futureGoalDuration(createdAt: string, completedAt: string) {
   const remainingDays = days % 30;
   if (!months) return `${days} ${days === 1 ? 'dia' : 'dias'}`;
   return `${months} ${months === 1 ? 'mês' : 'meses'}${remainingDays ? ` e ${remainingDays} ${remainingDays === 1 ? 'dia' : 'dias'}` : ''}`;
+}
+
+function RoutineWeekCard({ count }: { count: number }) {
+  return <section className="routine-week-card"><div><span className="eyebrow">Constância</span><h2>Rotinas completas</h2><p>Você concluiu sua rotina em <strong>{count} {count === 1 ? 'dia' : 'dias'}</strong> nesta semana.</p></div><strong className="routine-week-total">{count}<small>/7</small></strong></section>;
+}
+
+function RoutineConfetti() {
+  return <div className="routine-confetti" aria-hidden="true">{Array.from({ length: 34 }, (_, index) => <i key={index} style={{ '--x': `${(index * 29) % 100}%`, '--delay': `${(index % 7) * 45}ms`, '--turn': `${index % 2 ? 220 : -220}deg` } as React.CSSProperties} />)}</div>;
 }
 
 function DataBackup({ account, notify }: { account: Account; notify: (message: string) => void }) {
