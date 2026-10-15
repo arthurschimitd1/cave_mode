@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 type Routine = 'morning' | 'afternoon' | 'night';
 type Task = { id: number; title: string; note: string; dueAt: string | null; repeat: 'none' | 'daily' | 'weekdays' | 'weekly'; priority: 'low' | 'medium' | 'high'; estimateMinutes: number; meta: string; color: string; done: boolean; routine: Routine; position: number; planned: boolean };
 type Goal = { id: number; title: string; target: number; currentValue: number; period: 'daily' | 'weekly' };
+type FutureGoal = { id: number; title: string; timeframeMonths: 1 | 3 | 6 | 12; createdAt: string; completedAt: string | null };
 type Tab = 'today' | 'plan' | 'focus' | 'studies' | 'community' | 'profile';
 type Panel = { title: string; body: string } | null;
 type Account = { name: string; email: string; phone: string; sessionToken?: string };
@@ -114,6 +115,7 @@ export default function Home() {
   const [newPriority, setNewPriority] = useState<Task['priority']>('medium');
   const [newEstimate, setNewEstimate] = useState(25);
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [futureGoals, setFutureGoals] = useState<FutureGoal[]>([]);
   const [focusHistory, setFocusHistory] = useState<{ day: string; minutes: number }[]>([]);
   const [subjects, setSubjects] = useState<{ id: number; name: string; topics: { id: number; name: string; done: boolean }[] }[]>([]);
   const remindedTasks = useRef<Set<string>>(new Set());
@@ -217,8 +219,8 @@ export default function Home() {
     if (!account?.sessionToken) return;
     const headers = { Authorization: `Bearer ${account.sessionToken}` };
     try {
-      const [taskResponse, goalResponse, historyResponse, studyResponse] = await Promise.all([fetch('/api/workspace?mode=tasks', { headers }), fetch('/api/workspace?mode=goals', { headers }), fetch('/api/workspace?mode=history', { headers }), fetch('/api/workspace?mode=studies', { headers })]);
-      const [taskData, goalData, historyData, studyData] = await Promise.all([taskResponse.json(), goalResponse.json(), historyResponse.json(), studyResponse.json()]) as [{ tasks?: Task[] }, { goals?: Goal[] }, { history?: { day: string; minutes: number }[] }, { subjects?: typeof subjects }];
+      const [taskResponse, goalResponse, futureGoalResponse, historyResponse, studyResponse] = await Promise.all([fetch('/api/workspace?mode=tasks', { headers }), fetch('/api/workspace?mode=goals', { headers }), fetch('/api/workspace?mode=future-goals', { headers }), fetch('/api/workspace?mode=history', { headers }), fetch('/api/workspace?mode=studies', { headers })]);
+      const [taskData, goalData, futureGoalData, historyData, studyData] = await Promise.all([taskResponse.json(), goalResponse.json(), futureGoalResponse.json(), historyResponse.json(), studyResponse.json()]) as [{ tasks?: Task[] }, { goals?: Goal[] }, { futureGoals?: FutureGoal[] }, { history?: { day: string; minutes: number }[] }, { subjects?: typeof subjects }];
       if (taskResponse.ok) {
         const remoteTasks = taskData.tasks ?? [];
         if (!remoteTasks.length && tasks.length) {
@@ -228,6 +230,7 @@ export default function Home() {
         setTasks(remoteTasks.map((task) => ({ ...task, meta: task.dueAt ? new Date(task.dueAt).toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : task.repeat === 'daily' ? 'Todos os dias' : 'Sem horário definido', color: task.priority === 'high' ? 'peach' : task.priority === 'low' ? 'mint' : 'sky' })));
       }
       if (goalResponse.ok) setGoals(goalData.goals ?? []);
+      if (futureGoalResponse.ok) setFutureGoals(futureGoalData.futureGoals ?? []);
       if (historyResponse.ok) setFocusHistory(historyData.history ?? []);
       if (studyResponse.ok) setSubjects(studyData.subjects ?? []);
     } catch { notify('Não foi possível sincronizar agora. Seus dados locais continuam seguros.'); }
@@ -407,7 +410,7 @@ export default function Home() {
         {activeTab === 'focus' && <FocusView timerSeconds={timerSeconds} focusSeconds={focusSeconds} completedSessions={completedSessions} running={timerRunning} kind={timerKind} settings={pomodoro} setRunning={setTimerRunning} onSettings={async (next) => { setPomodoro(next); if (account?.sessionToken) await fetch('/api/pomodoro', { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${account.sessionToken}` }, body: JSON.stringify(next) }); notify('Pomodoro atualizado.'); }} reset={() => { setTimerRunning(false); setTimerSeconds((timerKind === 'focus' ? pomodoro.focusMinutes : timerKind === 'shortBreak' ? pomodoro.shortBreakMinutes : pomodoro.longBreakMinutes) * 60); notify('Cronômetro reiniciado.'); }} notify={notify} />}
         {activeTab === 'studies' && account && <StudiesView subjects={subjects} onSave={async (action, data) => { await workspace(action, data); await loadWorkspace(); }} notify={notify} />}
         {activeTab === 'community' && account && <CommunityView account={account} notify={notify} />}
-        {activeTab === 'profile' && account && <ProfileView account={account} completed={completed} focusSeconds={focusSeconds} completedSessions={completedSessions} goals={goals} history={focusHistory} onCreateGoal={async (title, target, period) => { await workspace('createGoal', { title, target, period }); await loadWorkspace(); notify('Meta criada.'); }} onOpen={openPanel} onLogout={logout} />}
+        {activeTab === 'profile' && account && <><ProfileView account={account} completed={completed} focusSeconds={focusSeconds} completedSessions={completedSessions} goals={goals} history={focusHistory} onCreateGoal={async (title, target, period) => { await workspace('createGoal', { title, target, period }); await loadWorkspace(); notify('Meta criada.'); }} onOpen={openPanel} onLogout={logout} /><FutureVision futureGoals={futureGoals} onCreate={async (title, timeframeMonths) => { await workspace('createFutureGoal', { title, timeframeMonths }); await loadWorkspace(); notify('Meta adicionada à sua visão de futuro.'); }} onComplete={async (id) => { await workspace('completeFutureGoal', { id }); await loadWorkspace(); notify('Meta marcada como realizada.'); }} /></>}
       </div>
 
       <nav className="bottom-nav" aria-label="Navegação principal">
@@ -661,6 +664,44 @@ function ChallengeView({ account, onBack, notify }: { account: Account; onBack: 
   const load = async () => { try { const response = await fetch('/api/workspace?mode=challenges', { headers: { Authorization: `Bearer ${account.sessionToken ?? ''}` } }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setChallenges(data.challenges); } catch (err) { setError(err instanceof Error ? err.message : 'Não foi possível carregar desafios.'); } };
   useEffect(() => { void load(); }, []);
   return <><PageHeading eyebrow="Comunidade" title="Desafios em grupo" action={<button className="text-button" onClick={onBack}>Voltar</button>} />{error && <p className="auth-error">{error}</p>}{challenges.map((challenge) => <section className="challenge-card" key={challenge.id}><span className="eyebrow">{challenge.members} participantes · seu ranking #{challenge.rank}</span><h2>{challenge.title}</h2><p>{challenge.description}</p><div className="large-progress"><i style={{ width: `${Math.min(100, challenge.progress / challenge.targetMinutes * 100)}%` }} /></div><small>{challenge.progress}/{challenge.targetMinutes} min nesta semana</small><button className="primary-button" disabled={challenge.joined} onClick={async () => { const response = await fetch('/api/workspace', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${account.sessionToken ?? ''}` }, body: JSON.stringify({ action: 'joinChallenge', challengeId: challenge.id }) }); if (!response.ok) return setError('Não foi possível entrar no desafio.'); notify('Você entrou no desafio. Bom foco!'); await load(); }}>{challenge.joined ? 'Participando' : 'Entrar no desafio'}</button></section>)}{!challenges.length && !error && <p className="empty-state">Nenhum desafio disponível agora.</p>}</>;
+}
+
+function futureGoalDuration(createdAt: string, completedAt: string) {
+  const milliseconds = Math.max(0, new Date(completedAt).getTime() - new Date(createdAt).getTime());
+  const days = Math.floor(milliseconds / 86_400_000);
+  if (days === 0) return 'no mesmo dia';
+  const months = Math.floor(days / 30);
+  const remainingDays = days % 30;
+  if (!months) return `${days} ${days === 1 ? 'dia' : 'dias'}`;
+  return `${months} ${months === 1 ? 'mês' : 'meses'}${remainingDays ? ` e ${remainingDays} ${remainingDays === 1 ? 'dia' : 'dias'}` : ''}`;
+}
+
+function FutureVision({ futureGoals, onCreate, onComplete }: { futureGoals: FutureGoal[]; onCreate: (title: string, timeframeMonths: FutureGoal['timeframeMonths']) => Promise<void>; onComplete: (id: number) => Promise<void> }) {
+  const [adding, setAdding] = useState(false);
+  const [title, setTitle] = useState('');
+  const [timeframeMonths, setTimeframeMonths] = useState<FutureGoal['timeframeMonths']>(1);
+  const [saving, setSaving] = useState(false);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [error, setError] = useState('');
+  const periods: { months: FutureGoal['timeframeMonths']; label: string }[] = [{ months: 1, label: '1 mês' }, { months: 3, label: '3 meses' }, { months: 6, label: '6 meses' }, { months: 12, label: '1 ano' }];
+  const formatDate = (value: string) => new Date(value).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
+
+  return <section className="section-block future-vision">
+    <div className="section-title">
+      <div><span className="eyebrow">Visão de futuro</span><h2>O que você quer tornar real?</h2></div>
+      <button className="text-button" onClick={() => { setError(''); setAdding(true); }}>+ Meta</button>
+    </div>
+    <p className="future-vision-copy">Defina uma direção e celebre o caminho real até ela.</p>
+    <div className="future-goal-list">
+      {futureGoals.length ? futureGoals.map((goal) => <article className={`future-goal-card ${goal.completedAt ? 'completed' : ''}`} key={goal.id}>
+        <div className="future-goal-meta"><span>{periods.find((period) => period.months === goal.timeframeMonths)?.label ?? `${goal.timeframeMonths} meses`}</span><small>Criada em {formatDate(goal.createdAt)}</small></div>
+        <h3>{goal.title}</h3>
+        {goal.completedAt ? <p className="future-goal-achieved">Realizada em <strong>{futureGoalDuration(goal.createdAt, goal.completedAt)}</strong></p> : <button className="future-complete-button" disabled={busyId === goal.id} onClick={async () => { setBusyId(goal.id); setError(''); try { await onComplete(goal.id); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Não foi possível concluir a meta.'); } finally { setBusyId(null); } }}>{busyId === goal.id ? 'Salvando...' : 'Concluir meta'}</button>}
+      </article>) : <p className="empty-state">Comece por algo que você quer conquistar nos próximos meses.</p>}
+    </div>
+    {error && <p className="future-goal-error">{error}</p>}
+    {adding && <div className="modal-backdrop" onClick={() => setAdding(false)}><form className="add-modal future-goal-modal" onClick={(event) => event.stopPropagation()} onSubmit={async (event) => { event.preventDefault(); if (!title.trim()) return; setSaving(true); setError(''); try { await onCreate(title.trim(), timeframeMonths); setTitle(''); setTimeframeMonths(1); setAdding(false); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Não foi possível criar a meta.'); } finally { setSaving(false); } }}><div className="modal-handle" /><h2>Nova visão</h2><p>Escolha o horizonte e deixe claro o que você quer realizar.</p><input autoFocus required maxLength={180} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Ex.: concluir meu curso de inglês" /><div className="future-periods" aria-label="Prazo da meta">{periods.map((period) => <button type="button" className={timeframeMonths === period.months ? 'selected' : ''} key={period.months} onClick={() => setTimeframeMonths(period.months)}>{period.label}</button>)}</div><button className="primary-button" type="submit" disabled={saving}>{saving ? 'Salvando...' : 'Adicionar à visão'}</button></form></div>}
+  </section>;
 }
 
 function ProfileView({ account, completed, focusSeconds, completedSessions, goals, history, onCreateGoal, onOpen, onLogout }: { account: Account; completed: number; focusSeconds: number; completedSessions: number; goals: Goal[]; history: { day: string; minutes: number }[]; onCreateGoal: (title: string, target: number, period: 'daily' | 'weekly') => Promise<void>; onOpen: (title: string, body: string) => void; onLogout: () => void }) {
