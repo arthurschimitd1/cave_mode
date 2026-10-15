@@ -98,6 +98,7 @@ export default function Home() {
   const [account, setAccount] = useState<Account | null>(null);
   const [authenticated, setAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
+  const [rememberedEmail, setRememberedEmail] = useState('');
   const [tasks, setTasks] = useState(initialTasks);
   const tasksRef = useRef<Task[]>(initialTasks);
   const [pomodoro, setPomodoro] = useState<PomodoroSettings>(defaultPomodoro);
@@ -140,6 +141,7 @@ export default function Home() {
     window.addEventListener('pointerdown', unlockAudio, { once: true });
     const saved = window.localStorage.getItem('cave-progress-v1');
     const savedSession = window.localStorage.getItem('cave-session-v1');
+    const savedEmail = window.localStorage.getItem('cave-last-email-v1');
     const savedAccounts = window.localStorage.getItem('cave-accounts-v1');
     const savedReminders = window.localStorage.getItem('cave-reminded-tasks-v1');
     if (savedReminders) {
@@ -156,15 +158,16 @@ export default function Home() {
         window.localStorage.removeItem('cave-progress-v1');
       }
     }
+    if (savedEmail) setRememberedEmail(normalizeEmail(savedEmail));
     if (savedSession) {
       try {
         const currentAccount = JSON.parse(savedSession) as Account;
-        if (currentAccount.sessionToken) {
-          setAccount(currentAccount);
-          setAuthenticated(true);
-        } else {
-          window.localStorage.removeItem('cave-session-v1');
+        if (currentAccount.email) {
+          const email = normalizeEmail(currentAccount.email);
+          window.localStorage.setItem('cave-last-email-v1', email);
+          setRememberedEmail(email);
         }
+        window.localStorage.removeItem('cave-session-v1');
       } catch {
         window.localStorage.removeItem('cave-session-v1');
       }
@@ -174,12 +177,10 @@ export default function Home() {
         const sessionEmail = window.localStorage.getItem('cave-session-email-v1');
         const legacyAccount = registeredAccounts.find((item) => item.email === sessionEmail);
         if (legacyAccount) {
-          const currentAccount = { name: legacyAccount.name, email: legacyAccount.email, phone: legacyAccount.phone };
-          void fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'migrate', ...legacyAccount }) }).then(async (response) => {
-            const data = await response.json() as { user?: Account; sessionToken?: string };
-            const migrated = data.user && data.sessionToken ? { ...data.user, sessionToken: data.sessionToken } : currentAccount;
-            window.localStorage.setItem('cave-session-v1', JSON.stringify(migrated)); setAccount(migrated); setAuthenticated(true);
-          });
+          const email = normalizeEmail(legacyAccount.email);
+          window.localStorage.setItem('cave-last-email-v1', email);
+          setRememberedEmail(email);
+          void fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'migrate', ...legacyAccount }) }).catch(() => undefined);
         }
       } catch {
         window.localStorage.removeItem('cave-accounts-v1');
@@ -387,7 +388,10 @@ export default function Home() {
   }
 
   function finishAuthentication(nextAccount: Account) {
-    window.localStorage.setItem('cave-session-v1', JSON.stringify(nextAccount));
+    const email = normalizeEmail(nextAccount.email);
+    window.localStorage.setItem('cave-last-email-v1', email);
+    window.localStorage.removeItem('cave-session-v1');
+    setRememberedEmail(email);
     setAccount(nextAccount);
     setAuthenticated(true);
   }
@@ -395,12 +399,15 @@ export default function Home() {
   function logout() {
     setTimerRunning(false);
     window.localStorage.removeItem('cave-session-v1');
+    window.localStorage.removeItem('cave-last-email-v1');
+    setRememberedEmail('');
+    setAccount(null);
     setAuthenticated(false);
     setActiveTab('today');
   }
 
   if (authLoading) return <main className="auth-shell"><div className="auth-loading">cave</div></main>;
-  if (!authenticated) return <AuthFlow onAuthenticated={finishAuthentication} />;
+  if (!authenticated) return <AuthFlow rememberedEmail={rememberedEmail} onAuthenticated={finishAuthentication} />;
 
   return (
     <main className={`app-shell ${timerRunning ? 'focus-mode' : ''}`}>
@@ -415,7 +422,7 @@ export default function Home() {
         {activeTab === 'plan' && <><PlanView tasks={tasks} onAdd={() => { setNewRepeat('none'); setShowPlanTask(true); }} onOpenTask={(task) => openPanel(task.title, `${task.note || 'Sem notas adicionais.'}\n\n${task.estimateMinutes} min estimados · ${task.repeat === 'none' ? 'não se repete' : `repete: ${task.repeat}`}. Você pode concluir esta tarefa pela tela Hoje.`)} /><WeeklyCompass tasks={tasks} plan={weeklyPlan} onSave={async (priority, note) => { await workspace('saveWeeklyPlan', { priority, note }); await loadWorkspace(); notify('Direção da semana salva.'); }} /></>}
         {activeTab === 'focus' && <FocusView timerSeconds={timerSeconds} focusSeconds={focusSeconds} completedSessions={completedSessions} running={timerRunning} kind={timerKind} settings={pomodoro} setRunning={setTimerRunning} onSettings={async (next) => { setPomodoro(next); if (account?.sessionToken) await fetch('/api/pomodoro', { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${account.sessionToken}` }, body: JSON.stringify(next) }); notify('Pomodoro atualizado.'); }} reset={() => { setTimerRunning(false); setTimerSeconds((timerKind === 'focus' ? pomodoro.focusMinutes : timerKind === 'shortBreak' ? pomodoro.shortBreakMinutes : pomodoro.longBreakMinutes) * 60); notify('Cronômetro reiniciado.'); }} notify={notify} />}
         {activeTab === 'studies' && account && <StudiesView subjects={subjects} onSave={async (action, data) => { await workspace(action, data); await loadWorkspace(); }} notify={notify} />}
-        {activeTab === 'community' && account && <CommunityView account={account} notify={notify} />}
+        {activeTab === 'community' && account && <CommunityView account={account} notify={notify} onSessionExpired={() => { setTimerRunning(false); setAccount(null); setAuthenticated(false); setActiveTab('today'); }} />}
         {activeTab === 'profile' && account && <><ProfileView account={account} completed={completed} focusSeconds={focusSeconds} completedSessions={completedSessions} goals={goals} futureGoals={futureGoals} history={focusHistory} onCreateGoal={async (title, target, period) => { await workspace('createGoal', { title, target, period }); await loadWorkspace(); notify('Meta criada.'); }} onCreateFutureGoal={async (title, timeframeMonths, nextStep) => { await workspace('createFutureGoal', { title, timeframeMonths, nextStep }); await loadWorkspace(); notify('Meta adicionada à sua visão de futuro.'); }} onCompleteFutureGoal={async (id) => { await workspace('completeFutureGoal', { id }); await loadWorkspace(); notify('Meta marcada como realizada.'); }} onOpen={openPanel} onLogout={logout} /><DataBackup account={account} notify={notify} /></>}
       </div>
 
@@ -435,11 +442,11 @@ function InfoPanel({ panel, onClose }: { panel: NonNullable<Panel>; onClose: () 
   return <div className="modal-backdrop" onClick={onClose}><section className="add-modal info-modal" onClick={(event) => event.stopPropagation()} aria-modal="true" role="dialog" aria-labelledby="panel-title"><div className="modal-handle" /><h2 id="panel-title">{panel.title}</h2><p>{panel.body}</p><button className="primary-button" onClick={onClose}>Entendi</button></section></div>;
 }
 
-function AuthFlow({ onAuthenticated }: { onAuthenticated: (account: Account) => void }) {
-  const [screen, setScreen] = useState<AuthScreen>('choice');
+function AuthFlow({ onAuthenticated, rememberedEmail }: { onAuthenticated: (account: Account) => void; rememberedEmail: string }) {
+  const [screen, setScreen] = useState<AuthScreen>(() => rememberedEmail ? 'login-pin' : 'choice');
   const [details, setDetails] = useState({ name: '', email: '', phone: '' });
-  const [email, setEmail] = useState('');
-  const [selectedEmail, setSelectedEmail] = useState('');
+  const [email, setEmail] = useState(rememberedEmail);
+  const [selectedEmail, setSelectedEmail] = useState(rememberedEmail);
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -504,7 +511,7 @@ function AuthFlow({ onAuthenticated }: { onAuthenticated: (account: Account) => 
   if (screen === 'login-email') return <main className="auth-shell"><AuthBrand /><form className="auth-card" onSubmit={continueLogin}><span className="eyebrow">Entrar</span><h1>Qual é seu e-mail?</h1><p>Vamos localizar sua conta salva neste aparelho.</p><label>E-mail<input autoFocus required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@email.com" /></label>{error && <p className="auth-error" role="alert">{error}</p>}<button className="primary-button auth-action" type="submit">Continuar</button><button className="auth-back" type="button" onClick={() => show('choice')}>Voltar</button></form></main>;
 
   const isRegistration = screen === 'register-pin';
-  return <main className="auth-shell"><AuthBrand /><section className="auth-card pin-card"><span className="eyebrow">{isRegistration ? 'Proteja seu acesso' : 'Olá de novo'}</span><h1>{isRegistration ? 'Crie seu PIN.' : 'Bem-vindo de volta.'}</h1><p>{isRegistration ? 'Escolha quatro números para abrir a Cave.' : 'Digite seu PIN para continuar.'}</p><PinKeypad pin={pin} onChange={setPin} /><div className="pin-status" aria-live="polite">{pin.length}/4 números</div>{error && <p className="auth-error" role="alert">{error}</p>}<button className="primary-button auth-action" disabled={pin.length !== 4 || submitting} onClick={isRegistration ? register : login}>{submitting ? 'Aguarde…' : isRegistration ? 'Criar acesso' : 'Entrar na Cave'}</button><button className="auth-back" type="button" disabled={submitting} onClick={() => show(isRegistration ? 'register-details' : 'login-email')}>Voltar</button></section></main>;
+  return <main className="auth-shell"><AuthBrand /><section className="auth-card pin-card"><span className="eyebrow">{isRegistration ? 'Proteja seu acesso' : 'Olá de novo'}</span><h1>{isRegistration ? 'Crie seu PIN.' : 'Bem-vindo de volta.'}</h1><p>{isRegistration ? 'Escolha quatro números para abrir a Cave.' : <>Digite seu PIN para continuar{selectedEmail && <> em <strong>{selectedEmail}</strong></>}.</>}</p><PinKeypad pin={pin} onChange={setPin} /><div className="pin-status" aria-live="polite">{pin.length}/4 números</div>{error && <p className="auth-error" role="alert">{error}</p>}<button className="primary-button auth-action" disabled={pin.length !== 4 || submitting} onClick={isRegistration ? register : login}>{submitting ? 'Aguarde…' : isRegistration ? 'Criar acesso' : 'Entrar na Cave'}</button><button className="auth-back" type="button" disabled={submitting} onClick={() => show(isRegistration ? 'register-details' : 'login-email')}>{isRegistration ? 'Voltar' : 'Usar outro e-mail'}</button></section></main>;
 }
 
 function AuthBrand() {
@@ -657,13 +664,13 @@ type CommunityComment = { id: number; body: string; created_at: string; name: st
 type CommunityMessage = { id: number; body: string; created_at: string; sender_email: string; recipient_email: string; sender_name: string };
 type Challenge = { id: number; title: string; description: string; targetMinutes: number; progress: number; joined: boolean; members: number; rank: number };
 
-function CommunityCore({ account, notify }: { account: Account; notify: (message: string) => void }) {
+function CommunityCore({ account, notify, onSessionExpired }: { account: Account; notify: (message: string) => void; onSessionExpired: () => void }) {
   const [tab, setTab] = useState<'feed' | 'following' | 'messages' | 'challenges'>('feed'); const [posts, setPosts] = useState<CommunityPost[]>([]); const [people, setPeople] = useState<CommunityPerson[]>([]); const [challenges, setChallenges] = useState<Challenge[]>([]); const [query, setQuery] = useState(''); const [postText, setPostText] = useState(''); const [commentFor, setCommentFor] = useState<number | null>(null); const [commentText, setCommentText] = useState(''); const [comments, setComments] = useState<CommunityComment[]>([]); const [talkingTo, setTalkingTo] = useState<CommunityPerson | null>(null); const [messages, setMessages] = useState<CommunityMessage[]>([]); const [messageText, setMessageText] = useState(''); const [error, setError] = useState('');
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${account.sessionToken ?? ''}` };
-  const call = async (url: string, init?: RequestInit) => { const response = await fetch(url, { ...init, headers: { ...headers, ...(init?.headers ?? {}) } }); const data = await response.json(); if (!response.ok) throw new Error(data.error ?? 'Não foi possível concluir esta ação.'); return data; };
+  const call = async (url: string, init?: RequestInit) => { const response = await fetch(url, { ...init, headers: { ...headers, ...(init?.headers ?? {}) } }); const data = await response.json(); if (response.status === 401) { onSessionExpired(); throw new Error('Sua sessão foi atualizada. Digite seu PIN novamente.'); } if (!response.ok) throw new Error(data.error ?? 'Não foi possível concluir esta ação.'); return data; };
   const loadPosts = async (following = false) => { try { const data = await call(`/api/social?mode=feed&following=${following ? '1' : '0'}`); setPosts(data.posts); setError(''); } catch (err) { setError(err instanceof Error ? err.message : 'Não foi possível carregar.'); } };
   const loadPeople = async (value = query) => { try { const data = await call(`/api/social?mode=people&q=${encodeURIComponent(value)}`); setPeople(data.people); } catch (err) { setError(err instanceof Error ? err.message : 'Não foi possível carregar.'); } };
-  const loadChallenges = async () => { try { const data = await fetch('/api/workspace?mode=challenges', { headers }); const result = await data.json(); if (!data.ok) throw new Error(result.error); setChallenges(result.challenges); } catch (err) { setError(err instanceof Error ? err.message : 'Não foi possível carregar desafios.'); } };
+  const loadChallenges = async () => { try { const result = await call('/api/workspace?mode=challenges'); setChallenges(result.challenges); } catch (err) { setError(err instanceof Error ? err.message : 'Não foi possível carregar desafios.'); } };
   useEffect(() => { void loadPosts(); void loadPeople(''); void loadChallenges(); }, []);
   const send = async (action: string, values: Record<string, unknown>) => call('/api/social', { method: 'POST', body: JSON.stringify({ action, ...values }) });
   const openComments = async (postId: number) => { setCommentFor(postId); try { const data = await call(`/api/social?mode=comments&post=${postId}`); setComments(data.comments); } catch (err) { setError(err instanceof Error ? err.message : 'Não foi possível carregar comentários.'); } };
@@ -676,9 +683,9 @@ function StudiesView({ subjects, onSave, notify }: { subjects: { id: number; nam
   return <><PageHeading eyebrow="Estudos" title="Aprenda no seu ritmo" /><form className="study-add" onSubmit={async (event) => { event.preventDefault(); if (!subject.trim()) return; await onSave('createSubject', { name: subject }); setSubject(''); notify('Matéria adicionada.'); }}><input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="Nova matéria: ex. Matemática" /><button type="submit">Adicionar</button></form>{subjects.length ? subjects.map((item) => { const completed = item.topics.filter((itemTopic) => itemTopic.done).length; const progress = item.topics.length ? completed / item.topics.length * 100 : 0; return <section className="study-card" key={item.id}><div className="study-head"><div><h2>{item.name}</h2><small>{completed}/{item.topics.length || 0} assuntos concluídos</small></div><button className="delete-study" aria-label={`Excluir ${item.name}`} onClick={async () => { await onSave('deleteSubject', { subjectId: item.id }); notify('Matéria excluída.'); }}>×</button></div><div className="study-progress"><i style={{ width: `${progress}%` }} /></div><div>{item.topics.map((itemTopic) => <div className={`study-topic ${itemTopic.done ? 'done' : ''}`} key={itemTopic.id}><button onClick={async () => { await onSave('toggleTopic', { topicId: itemTopic.id }); }}><span>{itemTopic.done ? '✓' : ''}</span>{itemTopic.name}</button><button className="delete-study" aria-label={`Excluir ${itemTopic.name}`} onClick={async () => { await onSave('deleteTopic', { topicId: itemTopic.id }); }}>×</button></div>)}</div><form onSubmit={async (event) => { event.preventDefault(); const name = topic[item.id]?.trim(); if (!name) return; await onSave('createTopic', { subjectId: item.id, name }); setTopic({ ...topic, [item.id]: '' }); }}><input value={topic[item.id] ?? ''} onChange={(event) => setTopic({ ...topic, [item.id]: event.target.value })} placeholder="Adicionar assunto" /><button type="submit">+</button></form></section>; }) : <p className="empty-state">Adicione uma matéria e organize os assuntos que quer estudar.</p>}</>;
 }
 
-function CommunityView({ account, notify }: { account: Account; notify: (message: string) => void }) {
+function CommunityView({ account, notify, onSessionExpired }: { account: Account; notify: (message: string) => void; onSessionExpired: () => void }) {
   const [view, setView] = useState<'feed' | 'people' | 'challenges'>('feed');
-  return <><div className="community-hub-tabs">{[['feed','Feed'],['people','Pessoas'],['challenges','Desafios']].map(([id,label]) => <button key={id} className={view === id ? 'selected' : ''} onClick={() => setView(id as typeof view)}>{label}</button>)}</div>{view === 'feed' && <CommunityCore account={account} notify={notify} />}{view === 'people' && <PeopleView account={account} notify={notify} />}{view === 'challenges' && <ChallengeView account={account} onBack={() => setView('feed')} notify={notify} />}</>;
+  return <><div className="community-hub-tabs">{[['feed','Feed'],['people','Pessoas'],['challenges','Desafios']].map(([id,label]) => <button key={id} className={view === id ? 'selected' : ''} onClick={() => setView(id as typeof view)}>{label}</button>)}</div>{view === 'feed' && <CommunityCore account={account} notify={notify} onSessionExpired={onSessionExpired} />}{view === 'people' && <PeopleView account={account} notify={notify} />}{view === 'challenges' && <ChallengeView account={account} onBack={() => setView('feed')} notify={notify} />}</>;
 }
 
 function PeopleView({ account, notify }: { account: Account; notify: (message: string) => void }) {
