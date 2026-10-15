@@ -53,6 +53,24 @@ function toUtcDateTime(value: string) {
   return Number.isNaN(date.getTime()) ? value : date.toISOString();
 }
 
+function urlBase64ToUint8Array(value: string) {
+  const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64.padEnd(base64.length + (4 - base64.length % 4) % 4, '=');
+  const raw = window.atob(padded);
+  return Uint8Array.from(raw, (character) => character.charCodeAt(0));
+}
+
+async function syncPushSubscription(sessionToken: string) {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window) || Notification.permission !== 'granted') return;
+  const configResponse = await fetch('/api/push', { headers: { Authorization: `Bearer ${sessionToken}` } });
+  const config = await configResponse.json() as { enabled?: boolean; publicKey?: string };
+  if (!configResponse.ok || !config.enabled || !config.publicKey) return;
+  const registration = await navigator.serviceWorker.ready;
+  let subscription = await registration.pushManager.getSubscription();
+  if (!subscription) subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(config.publicKey) });
+  await fetch('/api/push', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` }, body: JSON.stringify({ action: 'subscribe', subscription: subscription.toJSON() }) });
+}
+
 async function hashPin(pin: string) {
   const bytes = new TextEncoder().encode(`cave:${pin}`);
   const digest = await window.crypto.subtle.digest('SHA-256', bytes);
@@ -156,6 +174,15 @@ export default function Home() {
     setAuthLoading(false);
     return () => window.removeEventListener('pointerdown', unlockAudio);
   }, []);
+
+  useEffect(() => {
+    if (!account?.sessionToken) return;
+    const sync = () => { void syncPushSubscription(account.sessionToken!).catch(() => undefined); };
+    sync();
+    window.addEventListener('focus', sync);
+    const interval = window.setInterval(sync, 30_000);
+    return () => { window.removeEventListener('focus', sync); window.clearInterval(interval); };
+  }, [account?.sessionToken]);
 
   useEffect(() => {
     if (isHydrated) window.localStorage.setItem('cave-progress-v1', JSON.stringify({ tasks, focusSeconds, completedSessions }));

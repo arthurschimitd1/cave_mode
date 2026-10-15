@@ -1,4 +1,4 @@
-const CACHE = 'cave-shell-v1';
+const CACHE = 'cave-shell-v2';
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.add('/')).then(() => self.skipWaiting()));
 });
@@ -22,4 +22,22 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   event.respondWith(caches.match(event.request).then((cached) => cached || fetch(event.request)));
+});
+self.addEventListener('push', (event) => {
+  const data = event.data?.json() || {};
+  event.waitUntil(self.registration.showNotification(data.title || 'Cave', {
+    body: data.body || 'Você tem um lembrete.',
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    tag: data.tag || 'cave-reminder',
+    renotify: true,
+    data: { url: data.url || '/' },
+  }));
+});
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
+    const existing = windows.find((client) => client.url.startsWith(self.location.origin));
+    return existing ? existing.focus() : clients.openWindow(event.notification.data?.url || '/');
+  }));
 });
