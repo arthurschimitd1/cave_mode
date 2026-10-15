@@ -117,6 +117,7 @@ export default function Home() {
   const [focusHistory, setFocusHistory] = useState<{ day: string; minutes: number }[]>([]);
   const [subjects, setSubjects] = useState<{ id: number; name: string; topics: { id: number; name: string; done: boolean }[] }[]>([]);
   const remindedTasks = useRef<Set<string>>(new Set());
+  const remindersStarted = useRef(false);
   const [panel, setPanel] = useState<Panel>(null);
   const [toast, setToast] = useState('');
   const routineTasks = tasks.filter((task) => !task.planned);
@@ -134,6 +135,11 @@ export default function Home() {
     const saved = window.localStorage.getItem('cave-progress-v1');
     const savedSession = window.localStorage.getItem('cave-session-v1');
     const savedAccounts = window.localStorage.getItem('cave-accounts-v1');
+    const savedReminders = window.localStorage.getItem('cave-reminded-tasks-v1');
+    if (savedReminders) {
+      try { const keys = JSON.parse(savedReminders); if (Array.isArray(keys)) remindedTasks.current = new Set(keys.filter((key): key is string => typeof key === 'string').slice(-250)); }
+      catch { window.localStorage.removeItem('cave-reminded-tasks-v1'); }
+    }
     if (saved) {
       try {
         const data = JSON.parse(saved) as { tasks?: Task[]; focusSeconds?: number; completedSessions?: number };
@@ -282,12 +288,14 @@ export default function Home() {
     };
     const remind = () => {
       if (!('Notification' in window) || Notification.permission !== 'granted') return;
+      if (!remindersStarted.current) { remindersStarted.current = true; return; }
       const now = new Date();
       tasks.filter((task) => !task.done && task.dueAt).forEach((task) => {
         const due = reminderTime(task, now);
         const key = `${task.id}:${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
-        if (due && due.getTime() <= now.getTime() && due.getTime() > now.getTime() - 5 * 60_000 && !remindedTasks.current.has(key)) {
+        if (due && due.getTime() <= now.getTime() && due.getTime() > now.getTime() - 90_000 && !remindedTasks.current.has(key)) {
           remindedTasks.current.add(key);
+          window.localStorage.setItem('cave-reminded-tasks-v1', JSON.stringify(Array.from(remindedTasks.current).slice(-250)));
           void showReminder(task);
           playBell();
         }
