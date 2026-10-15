@@ -47,6 +47,12 @@ function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
 }
 
+function toUtcDateTime(value: string) {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString();
+}
+
 async function hashPin(pin: string) {
   const bytes = new TextEncoder().encode(`cave:${pin}`);
   const digest = await window.crypto.subtle.digest('SHA-256', bytes);
@@ -90,7 +96,7 @@ export default function Home() {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [focusHistory, setFocusHistory] = useState<{ day: string; minutes: number }[]>([]);
   const [subjects, setSubjects] = useState<{ id: number; name: string; topics: { id: number; name: string; done: boolean }[] }[]>([]);
-  const remindedTasks = useRef<Set<number>>(new Set());
+  const remindedTasks = useRef<Set<string>>(new Set());
   const [panel, setPanel] = useState<Panel>(null);
   const [toast, setToast] = useState('');
   const routineTasks = tasks.filter((task) => !task.planned);
@@ -225,19 +231,38 @@ export default function Home() {
   }, [toast]);
 
   useEffect(() => {
+    const reminderTime = (task: Task, now: Date) => {
+      const original = new Date(task.dueAt!);
+      if (task.repeat === 'none') return original;
+      if (task.repeat === 'weekdays' && (now.getDay() === 0 || now.getDay() === 6)) return null;
+      if (task.repeat === 'weekly' && now.getDay() !== original.getDay()) return null;
+      const occurrence = new Date(now);
+      occurrence.setHours(original.getHours(), original.getMinutes(), 0, 0);
+      return occurrence;
+    };
+    const showReminder = async (task: Task) => {
+      const options = { body: task.title, icon: '/icon-192.png', tag: `cave-task-${task.id}`, renotify: true };
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        await registration.showNotification('Cave · lembrete', options);
+      } catch {
+        new Notification('Cave · lembrete', options);
+      }
+    };
     const remind = () => {
       if (!('Notification' in window) || Notification.permission !== 'granted') return;
-      const now = Date.now();
+      const now = new Date();
       tasks.filter((task) => !task.done && task.dueAt).forEach((task) => {
-        const due = new Date(task.dueAt!).getTime();
-        if (due <= now + 60_000 && due > now - 60_000 && !remindedTasks.current.has(task.id)) {
-          new Notification('Cave · lembrete', { body: task.title, icon: '/icon-192.png' });
+        const due = reminderTime(task, now);
+        const key = `${task.id}:${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+        if (due && due.getTime() <= now.getTime() && due.getTime() > now.getTime() - 5 * 60_000 && !remindedTasks.current.has(key)) {
+          remindedTasks.current.add(key);
+          void showReminder(task);
           playBell();
-          remindedTasks.current.add(task.id);
         }
       });
     };
-    remind(); const timer = window.setInterval(remind, 30_000); return () => window.clearInterval(timer);
+    remind(); const timer = window.setInterval(remind, 15_000); return () => window.clearInterval(timer);
   }, [tasks]);
 
   useEffect(() => { const finish = () => finishFocus(); window.addEventListener('cave-finish-focus', finish); return () => window.removeEventListener('cave-finish-focus', finish); });
@@ -259,7 +284,7 @@ export default function Home() {
     event.preventDefault();
     if (!newTask.trim()) return;
     try {
-      await workspace('createTask', { title: newTask.trim(), note: newNote, dueAt: newDueAt, repeat: newRepeat, priority: newPriority, estimateMinutes: newEstimate, routine: newRoutine });
+      await workspace('createTask', { title: newTask.trim(), note: newNote, dueAt: toUtcDateTime(newDueAt), repeat: newRepeat, priority: newPriority, estimateMinutes: newEstimate, routine: newRoutine });
       await loadWorkspace();
     } catch (error) { notify(error instanceof Error ? error.message : 'Não foi possível adicionar a tarefa.'); return; }
     setNewTask('');
@@ -271,8 +296,9 @@ export default function Home() {
   async function addPlannedTask(event: React.FormEvent) {
     event.preventDefault();
     if (!newTask.trim() || !newDueAt) return notify('Escolha uma tarefa e o dia/horário.');
+    if ('Notification' in window && Notification.permission === 'default') await Notification.requestPermission();
     try {
-      await workspace('createTask', { title: newTask.trim(), note: newNote, dueAt: newDueAt, repeat: newRepeat, priority: newPriority, estimateMinutes: newEstimate, routine: 'morning', planned: true });
+      await workspace('createTask', { title: newTask.trim(), note: newNote, dueAt: toUtcDateTime(newDueAt), repeat: newRepeat, priority: newPriority, estimateMinutes: newEstimate, routine: 'morning', planned: true });
       await loadWorkspace(); setNewTask(''); setNewNote(''); setNewDueAt(''); setNewRepeat('none'); setNewPriority('medium'); setNewEstimate(25); setShowPlanTask(false); notify('Tarefa planejada.');
     } catch (error) { notify(error instanceof Error ? error.message : 'Não foi possível planejar a tarefa.'); }
   }
