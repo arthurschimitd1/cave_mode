@@ -29,6 +29,8 @@ const soundOptions = [
 ];
 type PomodoroSettings = { focusMinutes: number; shortBreakMinutes: number; longBreakMinutes: number; sound: string; soundEnabled: boolean };
 const defaultPomodoro: PomodoroSettings = { focusMinutes: 25, shortBreakMinutes: 5, longBreakMinutes: 15, sound: 'Chuva leve', soundEnabled: true };
+type FocusTool = 'pomodoro' | 'clock' | 'stopwatch' | 'timer';
+let selectedFocusTool: FocusTool = 'pomodoro';
 
 function formatTime(seconds: number) {
   const minutes = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -510,9 +512,9 @@ function PinKeypad({ pin, onChange }: { pin: string; onChange: (pin: string) => 
 }
 
 function PageHeading({ eyebrow, title, action }: { eyebrow: string; title: string; action?: React.ReactNode }) {
-  const [focusTool, setFocusTool] = useState<'pomodoro' | 'clock' | 'stopwatch' | 'timer'>('pomodoro');
+  const [focusTool, setFocusTool] = useState<FocusTool>(() => selectedFocusTool);
   const hasFocusTools = title === 'Presença no agora';
-  const selectFocusTool = (tool: typeof focusTool) => { setFocusTool(tool); window.dispatchEvent(new CustomEvent('cave-focus-tool', { detail: tool })); };
+  const selectFocusTool = (tool: FocusTool) => { selectedFocusTool = tool; setFocusTool(tool); window.dispatchEvent(new CustomEvent('cave-focus-tool', { detail: tool })); };
   return <><div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1></div><div className="heading-actions">{action}</div></div>{hasFocusTools && <div className="focus-tool-switcher" role="tablist" aria-label="Tipo de relógio">{[['pomodoro','◷','Pomodoro'],['clock','◴','Relógio'],['stopwatch','◉','Cronômetro'],['timer','⌛','Timer']].map(([id, icon, label]) => <button key={id} role="tab" aria-selected={focusTool === id} className={focusTool === id ? 'selected' : ''} onClick={() => selectFocusTool(id as typeof focusTool)}><span>{icon}</span>{label}</button>)}<button className="fullscreen-tool-button" onClick={() => window.dispatchEvent(new Event('cave-open-fullscreen-clock'))} aria-label="Abrir em tela cheia">⛶</button><button className="finish-tool-button" onClick={() => window.dispatchEvent(new Event('cave-finish-focus'))}>Finalizar</button></div>}</>;
 }
 
