@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 type Routine = 'morning' | 'afternoon' | 'night';
-type Task = { id: number; title: string; note: string; dueAt: string | null; repeat: 'none' | 'daily' | 'weekdays' | 'weekly'; priority: 'low' | 'medium' | 'high'; estimateMinutes: number; meta: string; color: string; done: boolean; routine: Routine; position: number };
+type Task = { id: number; title: string; note: string; dueAt: string | null; repeat: 'none' | 'daily' | 'weekdays' | 'weekly'; priority: 'low' | 'medium' | 'high'; estimateMinutes: number; meta: string; color: string; done: boolean; routine: Routine; position: number; planned: boolean };
 type Goal = { id: number; title: string; target: number; currentValue: number; period: 'daily' | 'weekly' };
-type Tab = 'today' | 'plan' | 'focus' | 'community' | 'profile';
+type Tab = 'today' | 'plan' | 'focus' | 'studies' | 'community' | 'profile';
 type Panel = { title: string; body: string } | null;
 type Account = { name: string; email: string; phone: string; sessionToken?: string };
 type LegacyAccount = Account & { pinHash: string };
@@ -17,6 +17,7 @@ const navItems: { id: Tab; label: string; icon: string }[] = [
   { id: 'today', label: 'Hoje', icon: '⌂' },
   { id: 'plan', label: 'Planejar', icon: '▤' },
   { id: 'focus', label: 'Foco', icon: '◷' },
+  { id: 'studies', label: 'Estudos', icon: '▧' },
   { id: 'community', label: 'Comunidade', icon: '♧' },
   { id: 'profile', label: 'Perfil', icon: '◉' },
 ];
@@ -52,10 +53,12 @@ async function hashPin(pin: string) {
   return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+let bellContext: AudioContext | null = null;
+function primeBell() { const Audio = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext; if (Audio) { bellContext ??= new Audio(); void bellContext.resume(); } }
 function playBell() {
   const Audio = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Audio) return;
-  const context = new Audio(); const oscillator = context.createOscillator(); const gain = context.createGain();
+  const context = bellContext ?? new Audio(); void context.resume(); const oscillator = context.createOscillator(); const gain = context.createGain();
   oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(660, context.currentTime); oscillator.frequency.exponentialRampToValueAtTime(880, context.currentTime + .35);
   gain.gain.setValueAtTime(.001, context.currentTime); gain.gain.exponentialRampToValueAtTime(.18, context.currentTime + .03); gain.gain.exponentialRampToValueAtTime(.001, context.currentTime + .7);
   oscillator.connect(gain).connect(context.destination); oscillator.start(); oscillator.stop(context.currentTime + .72);
@@ -75,6 +78,7 @@ export default function Home() {
   const [isHydrated, setIsHydrated] = useState(false);
   const [timerRunning, setTimerRunning] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
+  const [showPlanTask, setShowPlanTask] = useState(false);
   const [newTask, setNewTask] = useState('');
   const [newRoutine, setNewRoutine] = useState<Routine>('morning');
   const [newNote, setNewNote] = useState('');
@@ -84,14 +88,18 @@ export default function Home() {
   const [newEstimate, setNewEstimate] = useState(25);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [focusHistory, setFocusHistory] = useState<{ day: string; minutes: number }[]>([]);
+  const [subjects, setSubjects] = useState<{ id: number; name: string; topics: { id: number; name: string; done: boolean }[] }[]>([]);
   const remindedTasks = useRef<Set<number>>(new Set());
   const [panel, setPanel] = useState<Panel>(null);
   const [toast, setToast] = useState('');
-  const completed = tasks.filter((task) => task.done).length;
-  const progress = tasks.length ? Math.round((completed / tasks.length) * 100) : 0;
+  const routineTasks = tasks.filter((task) => !task.planned);
+  const completed = routineTasks.filter((task) => task.done).length;
+  const progress = routineTasks.length ? Math.round((completed / routineTasks.length) * 100) : 0;
 
   useEffect(() => {
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+    const unlockAudio = () => primeBell();
+    window.addEventListener('pointerdown', unlockAudio, { once: true });
     const saved = window.localStorage.getItem('cave-progress-v1');
     const savedSession = window.localStorage.getItem('cave-session-v1');
     const savedAccounts = window.localStorage.getItem('cave-accounts-v1');
@@ -124,10 +132,11 @@ export default function Home() {
         const legacyAccount = registeredAccounts.find((item) => item.email === sessionEmail);
         if (legacyAccount) {
           const currentAccount = { name: legacyAccount.name, email: legacyAccount.email, phone: legacyAccount.phone };
-          window.localStorage.setItem('cave-session-v1', JSON.stringify(currentAccount));
-          setAccount(currentAccount);
-          setAuthenticated(true);
-          void fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'migrate', ...legacyAccount }) });
+          void fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'migrate', ...legacyAccount }) }).then(async (response) => {
+            const data = await response.json() as { user?: Account; sessionToken?: string };
+            const migrated = data.user && data.sessionToken ? { ...data.user, sessionToken: data.sessionToken } : currentAccount;
+            window.localStorage.setItem('cave-session-v1', JSON.stringify(migrated)); setAccount(migrated); setAuthenticated(true);
+          });
         }
       } catch {
         window.localStorage.removeItem('cave-accounts-v1');
@@ -136,6 +145,7 @@ export default function Home() {
     }
     setIsHydrated(true);
     setAuthLoading(false);
+    return () => window.removeEventListener('pointerdown', unlockAudio);
   }, []);
 
   useEffect(() => {
@@ -161,8 +171,8 @@ export default function Home() {
     if (!account?.sessionToken) return;
     const headers = { Authorization: `Bearer ${account.sessionToken}` };
     try {
-      const [taskResponse, goalResponse, historyResponse] = await Promise.all([fetch('/api/workspace?mode=tasks', { headers }), fetch('/api/workspace?mode=goals', { headers }), fetch('/api/workspace?mode=history', { headers })]);
-      const [taskData, goalData, historyData] = await Promise.all([taskResponse.json(), goalResponse.json(), historyResponse.json()]) as [{ tasks?: Task[] }, { goals?: Goal[] }, { history?: { day: string; minutes: number }[] }];
+      const [taskResponse, goalResponse, historyResponse, studyResponse] = await Promise.all([fetch('/api/workspace?mode=tasks', { headers }), fetch('/api/workspace?mode=goals', { headers }), fetch('/api/workspace?mode=history', { headers }), fetch('/api/workspace?mode=studies', { headers })]);
+      const [taskData, goalData, historyData, studyData] = await Promise.all([taskResponse.json(), goalResponse.json(), historyResponse.json(), studyResponse.json()]) as [{ tasks?: Task[] }, { goals?: Goal[] }, { history?: { day: string; minutes: number }[] }, { subjects?: typeof subjects }];
       if (taskResponse.ok) {
         const remoteTasks = taskData.tasks ?? [];
         if (!remoteTasks.length && tasks.length) {
@@ -173,6 +183,7 @@ export default function Home() {
       }
       if (goalResponse.ok) setGoals(goalData.goals ?? []);
       if (historyResponse.ok) setFocusHistory(historyData.history ?? []);
+      if (studyResponse.ok) setSubjects(studyData.subjects ?? []);
     } catch { notify('Não foi possível sincronizar agora. Seus dados locais continuam seguros.'); }
   };
   useEffect(() => { void loadWorkspace(); }, [account?.sessionToken]);
@@ -218,12 +229,15 @@ export default function Home() {
         const due = new Date(task.dueAt!).getTime();
         if (due <= now + 60_000 && due > now - 60_000 && !remindedTasks.current.has(task.id)) {
           new Notification('Cave · lembrete', { body: task.title, icon: '/icon-192.png' });
+          playBell();
           remindedTasks.current.add(task.id);
         }
       });
     };
     remind(); const timer = window.setInterval(remind, 30_000); return () => window.clearInterval(timer);
   }, [tasks]);
+
+  useEffect(() => { const finish = () => finishFocus(); window.addEventListener('cave-finish-focus', finish); return () => window.removeEventListener('cave-finish-focus', finish); });
 
   const dateLabel = useMemo(() => new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })
     .format(new Date()).replace(/^./, (letter) => letter.toUpperCase()), []);
@@ -251,6 +265,15 @@ export default function Home() {
     notify('Tarefa adicionada à sua rotina.');
   }
 
+  async function addPlannedTask(event: React.FormEvent) {
+    event.preventDefault();
+    if (!newTask.trim() || !newDueAt) return notify('Escolha uma tarefa e o dia/horário.');
+    try {
+      await workspace('createTask', { title: newTask.trim(), note: newNote, dueAt: newDueAt, repeat: newRepeat, priority: newPriority, estimateMinutes: newEstimate, routine: 'morning', planned: true });
+      await loadWorkspace(); setNewTask(''); setNewNote(''); setNewDueAt(''); setNewRepeat('none'); setNewPriority('medium'); setNewEstimate(25); setShowPlanTask(false); notify('Tarefa planejada.');
+    } catch (error) { notify(error instanceof Error ? error.message : 'Não foi possível planejar a tarefa.'); }
+  }
+
   function deleteTask(id: number) {
     setTasks((current) => current.filter((task) => task.id !== id));
     notify('Tarefa removida da rotina.');
@@ -270,6 +293,18 @@ export default function Home() {
       return next;
     });
     window.setTimeout(() => { const items = tasks.map((task, index) => ({ id: task.id, routine: task.routine, position: index })); void workspace('reorderTasks', { items }).catch(() => void loadWorkspace()); }, 0);
+  }
+
+  function finishFocus() {
+    if (!timerRunning) return notify('Inicie uma sessão para poder finalizá-la.');
+    const total = (timerKind === 'focus' ? pomodoro.focusMinutes : timerKind === 'shortBreak' ? pomodoro.shortBreakMinutes : pomodoro.longBreakMinutes) * 60;
+    const elapsedMinutes = Math.max(1, Math.ceil((total - timerSeconds) / 60));
+    setTimerRunning(false); playBell();
+    if (timerKind === 'focus') {
+      setCompletedSessions((value) => value + 1); void workspace('logFocus', { minutes: elapsedMinutes }).then(loadWorkspace).catch(() => undefined);
+      setToast(`Sessão finalizada: ${elapsedMinutes} min registrados.`);
+    }
+    setTimerSeconds(total);
   }
 
   function finishAuthentication(nextAccount: Account) {
@@ -297,9 +332,10 @@ export default function Home() {
       </header>
 
       <div className="page-content">
-        {activeTab === 'today' && <TodayView dateLabel={dateLabel} tasks={tasks} completed={completed} progress={progress} focusSeconds={focusSeconds} onToggle={toggleTask} onDelete={deleteTask} onReorder={reorderTask} onAdd={() => setShowAddTask(true)} onFocus={() => setActiveTab('focus')} />}
-        {activeTab === 'plan' && <PlanView tasks={tasks} onAdd={() => setShowAddTask(true)} onOpenTask={(task) => openPanel(task.title, `${task.note || 'Sem notas adicionais.'}\n\n${task.estimateMinutes} min estimados · ${task.repeat === 'none' ? 'não se repete' : `repete: ${task.repeat}`}. Você pode concluir esta tarefa pela tela Hoje.`)} />}
+        {activeTab === 'today' && <TodayView dateLabel={dateLabel} tasks={routineTasks} completed={completed} progress={progress} focusSeconds={focusSeconds} onToggle={toggleTask} onDelete={deleteTask} onReorder={reorderTask} onAdd={() => setShowAddTask(true)} onFocus={() => setActiveTab('focus')} />}
+        {activeTab === 'plan' && <PlanView tasks={tasks} onAdd={() => { setNewRepeat('none'); setShowPlanTask(true); }} onOpenTask={(task) => openPanel(task.title, `${task.note || 'Sem notas adicionais.'}\n\n${task.estimateMinutes} min estimados · ${task.repeat === 'none' ? 'não se repete' : `repete: ${task.repeat}`}. Você pode concluir esta tarefa pela tela Hoje.`)} />}
         {activeTab === 'focus' && <FocusView timerSeconds={timerSeconds} focusSeconds={focusSeconds} completedSessions={completedSessions} running={timerRunning} kind={timerKind} settings={pomodoro} setRunning={setTimerRunning} onSettings={async (next) => { setPomodoro(next); setTimerRunning(false); setTimerKind('focus'); setTimerSeconds(next.focusMinutes * 60); if (account?.sessionToken) await fetch('/api/pomodoro', { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${account.sessionToken}` }, body: JSON.stringify(next) }); notify('Pomodoro atualizado.'); }} reset={() => { setTimerRunning(false); setTimerSeconds((timerKind === 'focus' ? pomodoro.focusMinutes : timerKind === 'shortBreak' ? pomodoro.shortBreakMinutes : pomodoro.longBreakMinutes) * 60); notify('Cronômetro reiniciado.'); }} notify={notify} />}
+        {activeTab === 'studies' && account && <StudiesView subjects={subjects} onSave={async (action, data) => { await workspace(action, data); await loadWorkspace(); }} notify={notify} />}
         {activeTab === 'community' && account && <CommunityView account={account} notify={notify} />}
         {activeTab === 'profile' && account && <ProfileView account={account} completed={completed} focusSeconds={focusSeconds} completedSessions={completedSessions} goals={goals} history={focusHistory} onCreateGoal={async (title, target, period) => { await workspace('createGoal', { title, target, period }); await loadWorkspace(); notify('Meta criada.'); }} onOpen={openPanel} onLogout={logout} />}
       </div>
@@ -309,6 +345,7 @@ export default function Home() {
       </nav>
 
       {showAddTask && <div className="modal-backdrop" onClick={() => setShowAddTask(false)}><form className="add-modal task-modal" onSubmit={addTask} onClick={(event) => event.stopPropagation()}><div className="modal-handle" /><h2>Nova rotina</h2><p>Ela aparecerá todos os dias no seu ritmo.</p><input autoFocus required value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="O que você quer realizar?" aria-label="Nova rotina" /><textarea value={newNote} onChange={(event) => setNewNote(event.target.value)} placeholder="Nota ou checklist (opcional)" maxLength={1000} /><div className="task-fields"><label>Prioridade<select value={newPriority} onChange={(event) => setNewPriority(event.target.value as Task['priority'])}><option value="high">Alta</option><option value="medium">Média</option><option value="low">Baixa</option></select></label><label>Tempo (min)<input type="number" min="1" max="600" value={newEstimate} onChange={(event) => setNewEstimate(Number(event.target.value))} /></label></div><label className="routine-select">Em qual rotina?<select value={newRoutine} onChange={(event) => setNewRoutine(event.target.value as Routine)}><option value="morning">Rotina matinal</option><option value="afternoon">Rotina da tarde</option><option value="night">Rotina da noite</option></select></label><button className="primary-button" type="submit">Adicionar à rotina</button><button className="modal-cancel" type="button" onClick={() => setShowAddTask(false)}>Cancelar</button></form></div>}
+      {showPlanTask && <div className="modal-backdrop" onClick={() => setShowPlanTask(false)}><form className="add-modal task-modal" onSubmit={addPlannedTask} onClick={(event) => event.stopPropagation()}><div className="modal-handle" /><h2>Planejar tarefa</h2><p>Esta tarefa entra na agenda, não na rotina diária.</p><input autoFocus required value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="O que precisa fazer?" /><textarea value={newNote} onChange={(event) => setNewNote(event.target.value)} placeholder="Nota (opcional)" /><div className="task-fields"><label>Dia e hora<input required type="datetime-local" value={newDueAt} onChange={(event) => setNewDueAt(event.target.value)} /></label><label>Repetir<select value={newRepeat} onChange={(event) => setNewRepeat(event.target.value as Task['repeat'])}><option value="none">Não repetir</option><option value="daily">Todos os dias</option><option value="weekdays">Dias úteis</option><option value="weekly">Semanalmente</option></select></label><label>Prioridade<select value={newPriority} onChange={(event) => setNewPriority(event.target.value as Task['priority'])}><option value="high">Alta</option><option value="medium">Média</option><option value="low">Baixa</option></select></label><label>Tempo (min)<input type="number" min="1" max="600" value={newEstimate} onChange={(event) => setNewEstimate(Number(event.target.value))} /></label></div><button className="primary-button" type="submit">Adicionar ao planejamento</button><button className="modal-cancel" type="button" onClick={() => setShowPlanTask(false)}>Cancelar</button></form></div>}
       {panel && <InfoPanel panel={panel} onClose={() => setPanel(null)} />}
       {toast && <div className="toast" role="status">✓ {toast}</div>}
     </main>
@@ -415,7 +452,7 @@ function PinKeypad({ pin, onChange }: { pin: string; onChange: (pin: string) => 
 }
 
 function PageHeading({ eyebrow, title, action }: { eyebrow: string; title: string; action?: React.ReactNode }) {
-  return <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1></div><div className="heading-actions">{title === 'Presença no agora' && <button className="soft-pill" onClick={() => window.dispatchEvent(new Event('cave-open-fullscreen-clock'))}>Tela cheia</button>}{action}</div></div>;
+  return <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1></div><div className="heading-actions">{title === 'Presença no agora' && <><button className="soft-pill" onClick={() => window.dispatchEvent(new Event('cave-open-fullscreen-clock'))}>Tela cheia</button><button className="soft-pill" onClick={() => window.dispatchEvent(new CustomEvent('cave-focus-tool', { detail: 'clock' }))}>Relógio</button><button className="soft-pill" onClick={() => window.dispatchEvent(new CustomEvent('cave-focus-tool', { detail: 'stopwatch' }))}>Cronômetro</button><button className="soft-pill" onClick={() => window.dispatchEvent(new CustomEvent('cave-focus-tool', { detail: 'timer' }))}>Timer</button><button className="soft-pill" onClick={() => window.dispatchEvent(new Event('cave-finish-focus'))}>Finalizar</button></>}{action}</div></div>;
 }
 
 function TodayView({ dateLabel, tasks, completed, progress, focusSeconds, onToggle, onDelete, onReorder, onAdd, onFocus }: { dateLabel: string; tasks: Task[]; completed: number; progress: number; focusSeconds: number; onToggle: (id: number) => void; onDelete: (id: number) => void; onReorder: (source: number, target: number) => void; onAdd: () => void; onFocus: () => void }) {
@@ -423,15 +460,16 @@ function TodayView({ dateLabel, tasks, completed, progress, focusSeconds, onTogg
     <section className="hero-section"><div className="eyebrow">{dateLabel}</div><h1>Seu progresso<br /><em>começa hoje.</em></h1><p>Uma tarefa de cada vez.</p><div className="hero-orbit orbit-one" /><div className="hero-orbit orbit-two" /><div className="hero-spark">✦</div></section>
     <section className="stat-grid"><div className="stat-card"><span className="stat-label">Tarefas concluídas</span><strong>{completed}<small>/{tasks.length}</small></strong><div className="mini-progress"><i style={{ width: `${progress}%` }} /></div><span className="stat-foot">Progresso de hoje</span></div><div className="stat-card accent-card"><span className="stat-label">Foco registrado</span><strong>{formatDuration(focusSeconds)}</strong><span className="stat-foot">Registrado nesta sessão</span></div></section>
     <section className="section-block"><div className="section-title"><div><span className="eyebrow">Acompanhe o ritmo</span><h2>Suas rotinas</h2></div><button className="text-button" onClick={onAdd}>+ Adicionar</button></div><div className="routine-card"><div className="routine-top"><span>Hoje</span><strong>{progress}% concluído</strong></div><div className="large-progress"><i style={{ width: `${progress}%` }} /></div><p className="reorder-hint">Segure o ícone ⠿ e arraste para reorganizar.</p>{(['morning', 'afternoon', 'night'] as Routine[]).map((routine) => <RoutineGroup key={routine} routine={routine} tasks={tasks.filter((task) => task.routine === routine)} onToggle={onToggle} onDelete={onDelete} onReorder={onReorder} />)}{!tasks.length && <p className="empty-state">Adicione sua primeira tarefa para começar.</p>}</div></section>
-    <section className="focus-banner"><div className="focus-symbol">◷</div><div><span className="eyebrow">Espaço de foco</span><h2>Reserve um tempo para você.</h2><p>25 minutos de presença podem mudar o seu dia.</p></div><button className="round-arrow" onClick={onFocus} aria-label="Abrir central de foco">↗</button></section>
+    <section className="focus-banner"><div className="focus-symbol">◷</div><div><span className="eyebrow">Espaço de foco</span><h2>Reserve um tempo para você.</h2><p>25 minutos de presença podem mudar o seu dia.</p></div><button className="focus-open" onClick={onFocus}>Começar</button></section>
     <section className="quote-card"><span>“</span><p>Consistência não é fazer tudo. É voltar para o que importa.</p><small>— Seu Cave de hoje</small></section>
   </>;
 }
 
 function RoutineGroup({ routine, tasks, onToggle, onDelete, onReorder }: { routine: Routine; tasks: Task[]; onToggle: (id: number) => void; onDelete: (id: number) => void; onReorder: (source: number, target: number) => void }) {
   const [dragging, setDragging] = useState<number | null>(null);
+  const draggingId = useRef<number | null>(null);
   const label = routine === 'morning' ? 'Rotina matinal' : routine === 'afternoon' ? 'Rotina da tarde' : 'Rotina da noite';
-  return <section className="routine-group"><h3>{label}<small>{tasks.length} {tasks.length === 1 ? 'tarefa' : 'tarefas'}</small></h3><div className="task-list">{tasks.length ? tasks.map((task) => <div className={`task-row ${task.done ? 'is-done' : ''} ${dragging === task.id ? 'dragging' : ''}`} data-task-id={task.id} key={task.id}><button className="drag-handle" type="button" aria-label={`Segurar para mover ${task.title}`} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); setDragging(task.id); }} onPointerMove={(event) => { if (dragging !== task.id) return; const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-task-id]'); const targetId = Number(target?.dataset.taskId); if (targetId) onReorder(task.id, targetId); }} onPointerUp={() => setDragging(null)} onPointerCancel={() => setDragging(null)}>⠿</button><button className="task-main" onClick={() => onToggle(task.id)} aria-pressed={task.done}><span className={`task-check ${task.done ? 'checked' : ''}`}>{task.done ? '✓' : ''}</span><span className="task-copy"><strong>{task.title}</strong><small>{task.meta}</small></span><span className={`task-color ${task.color}`} /></button><button className="task-delete" type="button" aria-label={`Excluir ${task.title}`} onClick={() => onDelete(task.id)}>×</button></div>) : <p className="routine-empty">Nenhuma tarefa nesta rotina.</p>}</div></section>;
+  return <section className="routine-group"><h3>{label}<small>{tasks.length} {tasks.length === 1 ? 'tarefa' : 'tarefas'}</small></h3><div className="task-list">{tasks.length ? tasks.map((task) => <div className={`task-row ${task.done ? 'is-done' : ''} ${dragging === task.id ? 'dragging' : ''}`} data-task-id={task.id} key={task.id}><button className="drag-handle" type="button" aria-label={`Segurar para mover ${task.title}`} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); draggingId.current = task.id; setDragging(task.id); }} onPointerMove={(event) => { if (draggingId.current !== task.id) return; const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-task-id]'); const targetId = Number(target?.dataset.taskId); if (targetId) onReorder(task.id, targetId); }} onPointerUp={() => { draggingId.current = null; setDragging(null); }} onPointerCancel={() => { draggingId.current = null; setDragging(null); }}>⠿</button><button className="task-main" onClick={() => onToggle(task.id)} aria-pressed={task.done}><span className={`task-check ${task.done ? 'checked' : ''}`}>{task.done ? '✓' : ''}</span><span className="task-copy"><strong>{task.title}</strong><small>{task.meta}</small></span><span className={`task-color ${task.color}`} /></button><button className="task-delete" type="button" aria-label={`Excluir ${task.title}`} onClick={() => onDelete(task.id)}>×</button></div>) : <p className="routine-empty">Nenhuma tarefa nesta rotina.</p>}</div></section>;
 }
 
 function LegacyPlanView({ tasks, onAdd, onOpenTask }: { tasks: Task[]; onAdd: () => void; onOpenTask: (task: Task) => void }) {
@@ -485,9 +523,19 @@ function FocusView({ timerSeconds, focusSeconds, completedSessions, running, kin
   }, [running, settings.sound, settings.soundEnabled]);
   const [fullClock, setFullClock] = useState(false);
   useEffect(() => { const open = () => { setFullClock(true); if (document.documentElement.requestFullscreen) void document.documentElement.requestFullscreen().catch(() => undefined); }; const changed = () => { if (!document.fullscreenElement) setFullClock(false); }; window.addEventListener('cave-open-fullscreen-clock', open); document.addEventListener('fullscreenchange', changed); return () => { window.removeEventListener('cave-open-fullscreen-clock', open); document.removeEventListener('fullscreenchange', changed); }; }, []);
+  const [tool, setTool] = useState<'pomodoro' | 'clock' | 'stopwatch' | 'timer'>('pomodoro'); const [toolRunning, setToolRunning] = useState(false); const [toolSeconds, setToolSeconds] = useState(0); const [timerMinutes, setTimerMinutes] = useState(10); const [now, setNow] = useState(new Date());
+  useEffect(() => { const select = (event: Event) => { const next = (event as CustomEvent<'clock' | 'stopwatch' | 'timer'>).detail; setRunning(false); setTool(next); setToolRunning(false); setToolSeconds(next === 'timer' ? timerMinutes * 60 : 0); }; window.addEventListener('cave-focus-tool', select); return () => window.removeEventListener('cave-focus-tool', select); }, [setRunning, timerMinutes]);
+  useEffect(() => { if (tool !== 'clock') return; const interval = window.setInterval(() => setNow(new Date()), 1000); return () => window.clearInterval(interval); }, [tool]);
+  useEffect(() => { if (!toolRunning || tool === 'clock') return; const interval = window.setInterval(() => setToolSeconds((value) => { if (tool === 'timer' && value <= 1) { setToolRunning(false); playBell(); notify('Timer finalizado.'); return 0; } return tool === 'timer' ? value - 1 : value + 1; }), 1000); return () => window.clearInterval(interval); }, [toolRunning, tool, notify]);
   const kindLabel = kind === 'focus' ? 'sessão de foco' : kind === 'shortBreak' ? 'pausa curta' : 'pausa longa';
+  if (tool !== 'pomodoro') return <ToolClock tool={tool} seconds={toolSeconds} running={toolRunning} now={now} timerMinutes={timerMinutes} onMinutes={(value) => { setTimerMinutes(value); setToolSeconds(value * 60); }} onToggle={() => { primeBell(); setToolRunning(!toolRunning); }} onBack={() => { setToolRunning(false); setTool('pomodoro'); }} />;
   if (fullClock) return <section className="clock-fullscreen"><button className="clock-exit" onClick={() => { setFullClock(false); if (document.fullscreenElement) void document.exitFullscreen(); }}>×</button><span>{running ? (kind === 'focus' ? 'Em foco' : 'Em pausa') : 'Pronto para começar'}</span><strong>{formatTime(timerSeconds)}</strong><small>{kindLabel}</small><div><button className="secondary-button" onClick={reset}>Reiniciar</button><button className="primary-button" onClick={() => { setRunning(!running); notify(running ? 'Sessão pausada.' : 'Sessão iniciada.'); }}>{running ? 'Pausar' : 'Começar'}</button></div></section>;
   return <><PageHeading eyebrow="Central de foco" title="Presença no agora" action={<button className="soft-pill" onClick={() => setEditing(true)}>Ajustar</button>} /><section className="timer-card"><div className="timer-ring" style={{ '--progress': `${percent * 3.6}deg` } as React.CSSProperties}><div className="timer-inner"><span>{running ? (kind === 'focus' ? 'Em foco' : 'Em pausa') : 'Pronto para começar'}</span><strong>{formatTime(timerSeconds)}</strong><small>{kindLabel}</small></div></div><div className="timer-controls"><button className="secondary-button" onClick={reset}>Reiniciar</button><button className="primary-button timer-start" onClick={() => { setRunning(!running); notify(running ? 'Sessão pausada.' : `${kind === 'focus' ? 'Foco' : 'Pausa'} iniciado.`); }}>{running ? 'Pausar' : kind === 'focus' ? 'Começar foco' : 'Começar pausa'}</button></div></section><div className="focus-options"><div><span>Duração</span><strong>{Math.round(duration / 60)} min</strong></div><div><span>Foco registrado</span><strong>{formatDuration(focusSeconds)}</strong></div><div><span>Sessões concluídas</span><strong>{completedSessions}</strong></div></div><section className="section-block"><div className="section-title"><div><span className="eyebrow">Escolha seu ambiente</span><h2>Som para acompanhar</h2></div><button className="text-button" onClick={() => void onSettings({ ...settings, soundEnabled: !settings.soundEnabled })}>{settings.soundEnabled ? 'Desligar' : 'Ligar'}</button></div><div className="sound-grid">{soundOptions.map((sound) => <button key={sound.name} className={`sound-card ${settings.sound === sound.name ? 'selected' : ''}`} onClick={() => { void onSettings({ ...settings, sound: sound.name, soundEnabled: true }); notify(`${sound.name} selecionado.`); }} aria-pressed={settings.sound === sound.name}>{sound.icon}<span>{sound.name}</span><small>{sound.description}</small></button>)}</div></section>{editing && <div className="modal-backdrop" onClick={() => setEditing(false)}><form className="add-modal pomodoro-modal" onClick={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); void onSettings(draft); setEditing(false); }}><div className="modal-handle" /><h2>Configurar Pomodoro</h2><p>Defina o ritmo que funciona para você.</p><label>Foco (min)<input type="number" min="1" max="120" value={draft.focusMinutes} onChange={(event) => setDraft({ ...draft, focusMinutes: Number(event.target.value) })} /></label><label>Pausa curta (min)<input type="number" min="1" max="120" value={draft.shortBreakMinutes} onChange={(event) => setDraft({ ...draft, shortBreakMinutes: Number(event.target.value) })} /></label><label>Pausa longa (min)<input type="number" min="1" max="120" value={draft.longBreakMinutes} onChange={(event) => setDraft({ ...draft, longBreakMinutes: Number(event.target.value) })} /></label><button className="primary-button" type="submit">Salvar configuração</button></form></div>}</>;
+}
+
+function ToolClock({ tool, seconds, running, now, timerMinutes, onMinutes, onToggle, onBack }: { tool: 'clock' | 'stopwatch' | 'timer'; seconds: number; running: boolean; now: Date; timerMinutes: number; onMinutes: (value: number) => void; onToggle: () => void; onBack: () => void }) {
+  const title = tool === 'clock' ? 'Relógio' : tool === 'stopwatch' ? 'Cronômetro' : 'Timer'; const display = tool === 'clock' ? now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : formatTime(seconds);
+  return <><PageHeading eyebrow="Central de foco" title={title} action={<button className="soft-pill" onClick={onBack}>Pomodoro</button>} /><section className="timer-card tool-clock"><span>{tool === 'clock' ? now.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' }) : tool === 'stopwatch' ? 'tempo corrido' : 'contagem regressiva'}</span><strong>{display}</strong>{tool === 'timer' && <label>Minutos<input type="number" min="1" max="180" disabled={running} value={timerMinutes} onChange={(event) => onMinutes(Math.max(1, Number(event.target.value)))} /></label>}{tool !== 'clock' && <button className="primary-button" onClick={onToggle}>{running ? 'Pausar' : 'Começar'}</button>}</section></>;
 }
 
 type CommunityPost = { id: number; body: string; created_at: string; name: string; email: string; likes: number; comments: number; liked: boolean | null };
@@ -508,6 +556,11 @@ function CommunityCore({ account, notify }: { account: Account; notify: (message
   const openComments = async (postId: number) => { setCommentFor(postId); try { const data = await call(`/api/social?mode=comments&post=${postId}`); setComments(data.comments); } catch (err) { setError(err instanceof Error ? err.message : 'Não foi possível carregar comentários.'); } };
   const openMessages = async (person: CommunityPerson) => { setTalkingTo(person); setTab('messages'); try { const data = await call(`/api/social?mode=messages&with=${encodeURIComponent(person.email)}`); setMessages(data.messages); } catch (err) { setError(err instanceof Error ? err.message : 'Não foi possível abrir a conversa.'); } };
   return <><PageHeading eyebrow="Comunidade" title="Crescer junto é melhor" action={<button className="icon-button" aria-label="Atualizar comunidade" onClick={() => void loadPosts(tab === 'following')}>↻</button>} /><div className="community-tabs">{[['feed','Para você'],['following','Seguindo'],['messages','Conversas']].map(([id,label]) => <button key={id} className={tab === id ? 'selected' : ''} onClick={() => { setTab(id as typeof tab); if (id === 'feed') void loadPosts(); if (id === 'following') void loadPosts(true); }} aria-pressed={tab === id}>{label}</button>)}</div>{error && <p className="auth-error">{error}</p>}<section className="people-card"><input value={query} onChange={(event) => { setQuery(event.target.value); void loadPeople(event.target.value); }} placeholder="Buscar pessoas por nome ou e-mail" aria-label="Buscar pessoas" />{query && <div className="people-list">{people.map((person) => <div className="person-row" key={person.email}><div><strong>{person.name}</strong><small>{person.followers} seguidores</small></div><button className="text-button" onClick={() => void openMessages(person)}>Mensagem</button><button className="follow-button" onClick={async () => { await send(person.following ? 'unfollow' : 'follow', { email: person.email }); await loadPeople(); notify(person.following ? 'Você deixou de seguir esta pessoa.' : 'Agora vocês estão conectados.'); }}>{person.following ? 'Seguindo' : 'Seguir'}</button></div>)}</div>}</section>{tab !== 'messages' && <><form className="composer" onSubmit={async (event) => { event.preventDefault(); if (!postText.trim()) return; await send('post', { body: postText }); setPostText(''); await loadPosts(tab === 'following'); notify('Publicação compartilhada.'); }}><textarea value={postText} onChange={(event) => setPostText(event.target.value)} maxLength={500} placeholder="Compartilhe uma pequena vitória ou ideia…" /><button className="primary-button" type="submit">Publicar</button></form>{posts.length ? posts.map((post) => <article className="feed-card" key={post.id}><div className="post-author"><div className="avatar avatar-blue">{post.name.charAt(0).toUpperCase()}</div><div><strong>{post.name}</strong><small>{new Date(post.created_at).toLocaleString('pt-BR')}</small></div></div><p>{post.body}</p><div className="post-actions"><button onClick={async () => { await send(post.liked ? 'unlike' : 'like', { postId: post.id }); await loadPosts(tab === 'following'); }}>{post.liked ? '♥' : '♡'} {post.likes}</button><button onClick={() => void openComments(post.id)}>◌ {post.comments} comentários</button><button onClick={() => { const person = people.find((item) => item.email === post.email) ?? { name: post.name, email: post.email, following: false, followers: 0 }; void openMessages(person); }}>✉ Mensagem</button></div>{commentFor === post.id && <div className="comments"><div>{comments.map((comment) => <p key={comment.id}><strong>{comment.name}</strong> {comment.body}</p>)}</div><form onSubmit={async (event) => { event.preventDefault(); if (!commentText.trim()) return; await send('comment', { postId: post.id, body: commentText }); setCommentText(''); await openComments(post.id); await loadPosts(tab === 'following'); }}><input value={commentText} onChange={(event) => setCommentText(event.target.value)} maxLength={300} placeholder="Escreva um comentário" /><button type="submit">Enviar</button></form></div>}</article>) : <p className="empty-state">Ainda não há publicações aqui. Que tal abrir a conversa?</p>}</>}{tab === 'messages' && <section className="messages-card">{!talkingTo ? <><p className="empty-state">Busque uma pessoa acima e toque em Mensagem para começar.</p>{people.map((person) => <button className="person-row" key={person.email} onClick={() => void openMessages(person)}><div><strong>{person.name}</strong><small>{person.email}</small></div><span>›</span></button>)}</> : <><div className="message-head"><button className="text-button" onClick={() => setTalkingTo(null)}>‹ Voltar</button><strong>{talkingTo.name}</strong></div><div className="message-list">{messages.map((message) => <p className={message.sender_email === account.email ? 'mine' : ''} key={message.id}>{message.body}</p>)}</div><form className="message-compose" onSubmit={async (event) => { event.preventDefault(); if (!messageText.trim()) return; await send('message', { email: talkingTo.email, body: messageText }); setMessageText(''); await openMessages(talkingTo); }}><input value={messageText} onChange={(event) => setMessageText(event.target.value)} maxLength={1000} placeholder="Mensagem" /><button type="submit">Enviar</button></form></>}</section>}</>;
+}
+
+function StudiesView({ subjects, onSave, notify }: { subjects: { id: number; name: string; topics: { id: number; name: string; done: boolean }[] }[]; onSave: (action: string, data: Record<string, unknown>) => Promise<void>; notify: (message: string) => void }) {
+  const [subject, setSubject] = useState(''); const [topic, setTopic] = useState<Record<number, string>>({});
+  return <><PageHeading eyebrow="Estudos" title="Aprenda no seu ritmo" /><form className="study-add" onSubmit={async (event) => { event.preventDefault(); if (!subject.trim()) return; await onSave('createSubject', { name: subject }); setSubject(''); notify('Matéria adicionada.'); }}><input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="Nova matéria: ex. Matemática" /><button type="submit">Adicionar</button></form>{subjects.length ? subjects.map((item) => <section className="study-card" key={item.id}><h2>{item.name}</h2><div>{item.topics.map((itemTopic) => <button className={itemTopic.done ? 'done' : ''} key={itemTopic.id} onClick={async () => { await onSave('toggleTopic', { topicId: itemTopic.id }); }}><span>{itemTopic.done ? '✓' : ''}</span>{itemTopic.name}</button>)}</div><form onSubmit={async (event) => { event.preventDefault(); const name = topic[item.id]?.trim(); if (!name) return; await onSave('createTopic', { subjectId: item.id, name }); setTopic({ ...topic, [item.id]: '' }); }}><input value={topic[item.id] ?? ''} onChange={(event) => setTopic({ ...topic, [item.id]: event.target.value })} placeholder="Adicionar assunto" /><button type="submit">+</button></form></section>) : <p className="empty-state">Adicione uma matéria e organize os assuntos que quer estudar.</p>}</>;
 }
 
 function CommunityView({ account, notify }: { account: Account; notify: (message: string) => void }) {
