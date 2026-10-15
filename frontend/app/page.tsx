@@ -5,7 +5,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 type Routine = 'morning' | 'afternoon' | 'night';
 type Task = { id: number; title: string; note: string; dueAt: string | null; repeat: 'none' | 'daily' | 'weekdays' | 'weekly'; priority: 'low' | 'medium' | 'high'; estimateMinutes: number; meta: string; color: string; done: boolean; routine: Routine; position: number; planned: boolean };
 type Goal = { id: number; title: string; target: number; currentValue: number; period: 'daily' | 'weekly' };
-type FutureGoal = { id: number; title: string; timeframeMonths: 1 | 3 | 6 | 12; createdAt: string; completedAt: string | null };
+type FutureGoal = { id: number; title: string; timeframeMonths: 1 | 3 | 6 | 12; nextStep: string; createdAt: string; completedAt: string | null };
+type DailyCheckIn = { mood: string; priority: string } | null;
+type WeeklyPlan = { priority: string; note: string } | null;
 type Tab = 'today' | 'plan' | 'focus' | 'studies' | 'community' | 'profile';
 type Panel = { title: string; body: string } | null;
 type Account = { name: string; email: string; phone: string; sessionToken?: string };
@@ -116,6 +118,8 @@ export default function Home() {
   const [newEstimate, setNewEstimate] = useState(25);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [futureGoals, setFutureGoals] = useState<FutureGoal[]>([]);
+  const [dailyCheckIn, setDailyCheckIn] = useState<DailyCheckIn>(null);
+  const [weeklyPlan, setWeeklyPlan] = useState<WeeklyPlan>(null);
   const [focusHistory, setFocusHistory] = useState<{ day: string; minutes: number }[]>([]);
   const [subjects, setSubjects] = useState<{ id: number; name: string; topics: { id: number; name: string; done: boolean }[] }[]>([]);
   const remindedTasks = useRef<Set<string>>(new Set());
@@ -219,8 +223,8 @@ export default function Home() {
     if (!account?.sessionToken) return;
     const headers = { Authorization: `Bearer ${account.sessionToken}` };
     try {
-      const [taskResponse, goalResponse, futureGoalResponse, historyResponse, studyResponse] = await Promise.all([fetch('/api/workspace?mode=tasks', { headers }), fetch('/api/workspace?mode=goals', { headers }), fetch('/api/workspace?mode=future-goals', { headers }), fetch('/api/workspace?mode=history', { headers }), fetch('/api/workspace?mode=studies', { headers })]);
-      const [taskData, goalData, futureGoalData, historyData, studyData] = await Promise.all([taskResponse.json(), goalResponse.json(), futureGoalResponse.json(), historyResponse.json(), studyResponse.json()]) as [{ tasks?: Task[] }, { goals?: Goal[] }, { futureGoals?: FutureGoal[] }, { history?: { day: string; minutes: number }[] }, { subjects?: typeof subjects }];
+      const [taskResponse, goalResponse, futureGoalResponse, historyResponse, studyResponse, checkInResponse, weeklyPlanResponse] = await Promise.all([fetch('/api/workspace?mode=tasks', { headers }), fetch('/api/workspace?mode=goals', { headers }), fetch('/api/workspace?mode=future-goals', { headers }), fetch('/api/workspace?mode=history', { headers }), fetch('/api/workspace?mode=studies', { headers }), fetch('/api/workspace?mode=check-in', { headers }), fetch('/api/workspace?mode=weekly-plan', { headers })]);
+      const [taskData, goalData, futureGoalData, historyData, studyData, checkInData, weeklyPlanData] = await Promise.all([taskResponse.json(), goalResponse.json(), futureGoalResponse.json(), historyResponse.json(), studyResponse.json(), checkInResponse.json(), weeklyPlanResponse.json()]) as [{ tasks?: Task[] }, { goals?: Goal[] }, { futureGoals?: FutureGoal[] }, { history?: { day: string; minutes: number }[] }, { subjects?: typeof subjects }, { checkIn?: DailyCheckIn }, { weeklyPlan?: WeeklyPlan }];
       if (taskResponse.ok) {
         const remoteTasks = taskData.tasks ?? [];
         if (!remoteTasks.length && tasks.length) {
@@ -233,6 +237,8 @@ export default function Home() {
       if (futureGoalResponse.ok) setFutureGoals(futureGoalData.futureGoals ?? []);
       if (historyResponse.ok) setFocusHistory(historyData.history ?? []);
       if (studyResponse.ok) setSubjects(studyData.subjects ?? []);
+      if (checkInResponse.ok) setDailyCheckIn(checkInData.checkIn ?? null);
+      if (weeklyPlanResponse.ok) setWeeklyPlan(weeklyPlanData.weeklyPlan ?? null);
     } catch { notify('Não foi possível sincronizar agora. Seus dados locais continuam seguros.'); }
   };
   useEffect(() => { void loadWorkspace(); }, [account?.sessionToken]);
@@ -405,12 +411,12 @@ export default function Home() {
       </header>
 
       <div className="page-content">
-        {activeTab === 'today' && <TodayView dateLabel={dateLabel} tasks={routineTasks} plannedTasks={plannedTodayTasks} completed={completed} progress={progress} focusSeconds={focusSeconds} onToggle={toggleTask} onDelete={deleteTask} onReorder={reorderTask} onAdd={() => setShowAddTask(true)} onFocus={() => setActiveTab('focus')} />}
-        {activeTab === 'plan' && <PlanView tasks={tasks} onAdd={() => { setNewRepeat('none'); setShowPlanTask(true); }} onOpenTask={(task) => openPanel(task.title, `${task.note || 'Sem notas adicionais.'}\n\n${task.estimateMinutes} min estimados · ${task.repeat === 'none' ? 'não se repete' : `repete: ${task.repeat}`}. Você pode concluir esta tarefa pela tela Hoje.`)} />}
+        {activeTab === 'today' && <><TodayView dateLabel={dateLabel} tasks={routineTasks} plannedTasks={plannedTodayTasks} completed={completed} progress={progress} focusSeconds={focusSeconds} onToggle={toggleTask} onDelete={deleteTask} onReorder={reorderTask} onAdd={() => setShowAddTask(true)} onFocus={() => setActiveTab('focus')} /><DailyCheckInCard checkIn={dailyCheckIn} onSave={async (mood, priority) => { await workspace('saveCheckIn', { mood, priority }); await loadWorkspace(); notify('Check-in salvo. Sua prioridade está clara.'); }} /></>}
+        {activeTab === 'plan' && <><PlanView tasks={tasks} onAdd={() => { setNewRepeat('none'); setShowPlanTask(true); }} onOpenTask={(task) => openPanel(task.title, `${task.note || 'Sem notas adicionais.'}\n\n${task.estimateMinutes} min estimados · ${task.repeat === 'none' ? 'não se repete' : `repete: ${task.repeat}`}. Você pode concluir esta tarefa pela tela Hoje.`)} /><WeeklyCompass tasks={tasks} plan={weeklyPlan} onSave={async (priority, note) => { await workspace('saveWeeklyPlan', { priority, note }); await loadWorkspace(); notify('Direção da semana salva.'); }} /></>}
         {activeTab === 'focus' && <FocusView timerSeconds={timerSeconds} focusSeconds={focusSeconds} completedSessions={completedSessions} running={timerRunning} kind={timerKind} settings={pomodoro} setRunning={setTimerRunning} onSettings={async (next) => { setPomodoro(next); if (account?.sessionToken) await fetch('/api/pomodoro', { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${account.sessionToken}` }, body: JSON.stringify(next) }); notify('Pomodoro atualizado.'); }} reset={() => { setTimerRunning(false); setTimerSeconds((timerKind === 'focus' ? pomodoro.focusMinutes : timerKind === 'shortBreak' ? pomodoro.shortBreakMinutes : pomodoro.longBreakMinutes) * 60); notify('Cronômetro reiniciado.'); }} notify={notify} />}
         {activeTab === 'studies' && account && <StudiesView subjects={subjects} onSave={async (action, data) => { await workspace(action, data); await loadWorkspace(); }} notify={notify} />}
         {activeTab === 'community' && account && <CommunityView account={account} notify={notify} />}
-        {activeTab === 'profile' && account && <ProfileView account={account} completed={completed} focusSeconds={focusSeconds} completedSessions={completedSessions} goals={goals} futureGoals={futureGoals} history={focusHistory} onCreateGoal={async (title, target, period) => { await workspace('createGoal', { title, target, period }); await loadWorkspace(); notify('Meta criada.'); }} onCreateFutureGoal={async (title, timeframeMonths) => { await workspace('createFutureGoal', { title, timeframeMonths }); await loadWorkspace(); notify('Meta adicionada à sua visão de futuro.'); }} onCompleteFutureGoal={async (id) => { await workspace('completeFutureGoal', { id }); await loadWorkspace(); notify('Meta marcada como realizada.'); }} onOpen={openPanel} onLogout={logout} />}
+        {activeTab === 'profile' && account && <><ProfileView account={account} completed={completed} focusSeconds={focusSeconds} completedSessions={completedSessions} goals={goals} futureGoals={futureGoals} history={focusHistory} onCreateGoal={async (title, target, period) => { await workspace('createGoal', { title, target, period }); await loadWorkspace(); notify('Meta criada.'); }} onCreateFutureGoal={async (title, timeframeMonths, nextStep) => { await workspace('createFutureGoal', { title, timeframeMonths, nextStep }); await loadWorkspace(); notify('Meta adicionada à sua visão de futuro.'); }} onCompleteFutureGoal={async (id) => { await workspace('completeFutureGoal', { id }); await loadWorkspace(); notify('Meta marcada como realizada.'); }} onOpen={openPanel} onLogout={logout} /><DataBackup account={account} notify={notify} /></>}
       </div>
 
       <nav className="bottom-nav" aria-label="Navegação principal">
@@ -529,6 +535,29 @@ function PageHeading({ eyebrow, title, action }: { eyebrow: string; title: strin
   const hasFocusTools = title === 'Presença no agora';
   const selectFocusTool = (tool: FocusTool) => { selectedFocusTool = tool; setFocusTool(tool); window.dispatchEvent(new CustomEvent('cave-focus-tool', { detail: tool })); };
   return <><div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1></div><div className="heading-actions">{action}</div></div>{hasFocusTools && <div className="focus-tool-switcher" role="tablist" aria-label="Tipo de relógio">{[['pomodoro','◷','Pomodoro'],['clock','◴','Relógio'],['stopwatch','◉','Cronômetro'],['timer','⌛','Timer']].map(([id, icon, label]) => <button key={id} role="tab" aria-selected={focusTool === id} className={focusTool === id ? 'selected' : ''} onClick={() => selectFocusTool(id as typeof focusTool)}><span>{icon}</span>{label}</button>)}<button className="fullscreen-tool-button" onClick={() => window.dispatchEvent(new Event('cave-open-fullscreen-clock'))} aria-label="Abrir em tela cheia">⛶</button><button className="finish-tool-button" onClick={() => window.dispatchEvent(new Event('cave-finish-focus'))}>Finalizar</button></div>}</>;
+}
+
+function DailyCheckInCard({ checkIn, onSave }: { checkIn: DailyCheckIn; onSave: (mood: string, priority: string) => Promise<void> }) {
+  const [editing, setEditing] = useState(!checkIn);
+  const [mood, setMood] = useState(checkIn?.mood ?? 'Focado');
+  const [priority, setPriority] = useState(checkIn?.priority ?? '');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { setMood(checkIn?.mood ?? 'Focado'); setPriority(checkIn?.priority ?? ''); setEditing(!checkIn); }, [checkIn]);
+  const moods = ['Focado', 'Calmo', 'Cansado', 'Animado'];
+  if (!editing && checkIn) return <section className="daily-checkin checkin-saved"><div><span className="eyebrow">Check-in de hoje · {checkIn.mood}</span><h2>{checkIn.priority}</h2><p>Esta é a sua prioridade. O resto pode esperar.</p></div><button className="text-button" onClick={() => setEditing(true)}>Editar</button></section>;
+  return <section className="daily-checkin"><div className="section-title"><div><span className="eyebrow">Check-in de hoje</span><h2>O que importa agora?</h2></div></div><p>Escolha uma prioridade antes de abrir a lista inteira.</p><div className="mood-picker">{moods.map((item) => <button type="button" className={mood === item ? 'selected' : ''} key={item} onClick={() => setMood(item)}>{item}</button>)}</div><form onSubmit={async (event) => { event.preventDefault(); if (!priority.trim()) return; setSaving(true); try { await onSave(mood, priority.trim()); setEditing(false); } finally { setSaving(false); } }}><input value={priority} onChange={(event) => setPriority(event.target.value)} maxLength={180} placeholder="Minha prioridade número um é…" /><button className="primary-button" type="submit" disabled={saving}>{saving ? 'Salvando...' : 'Definir prioridade'}</button></form></section>;
+}
+
+function WeeklyCompass({ tasks, plan, onSave }: { tasks: Task[]; plan: WeeklyPlan; onSave: (priority: string, note: string) => Promise<void> }) {
+  const [editing, setEditing] = useState(!plan);
+  const [priority, setPriority] = useState(plan?.priority ?? '');
+  const [note, setNote] = useState(plan?.note ?? '');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { setPriority(plan?.priority ?? ''); setNote(plan?.note ?? ''); setEditing(!plan); }, [plan]);
+  const today = new Date(); const monday = new Date(today); monday.setDate(today.getDate() - ((today.getDay() + 6) % 7)); monday.setHours(0, 0, 0, 0); const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6); sunday.setHours(23, 59, 59, 999);
+  const weekTasks = tasks.filter((task) => task.dueAt && new Date(task.dueAt) >= monday && new Date(task.dueAt) <= sunday);
+  const done = weekTasks.filter((task) => task.done).length; const plannedMinutes = weekTasks.reduce((sum, task) => sum + task.estimateMinutes, 0);
+  return <section className="section-block weekly-compass"><div className="section-title"><div><span className="eyebrow">Planejamento semanal</span><h2>Uma semana com direção</h2></div>{plan && <button className="text-button" onClick={() => setEditing(true)}>Editar</button>}</div>{editing ? <form onSubmit={async (event) => { event.preventDefault(); if (!priority.trim()) return; setSaving(true); try { await onSave(priority.trim(), note.trim()); setEditing(false); } finally { setSaving(false); } }}><input value={priority} onChange={(event) => setPriority(event.target.value)} maxLength={180} placeholder="Resultado mais importante desta semana" /><textarea value={note} onChange={(event) => setNote(event.target.value)} maxLength={600} placeholder="Como você vai proteger esse foco? (opcional)" /><button className="primary-button" type="submit" disabled={saving}>{saving ? 'Salvando...' : 'Salvar direção da semana'}</button></form> : <div className="weekly-plan-saved"><strong>{plan?.priority}</strong>{plan?.note && <p>{plan.note}</p>}<div><span>{done}/{weekTasks.length} itens concluídos</span><span>{plannedMinutes} min planejados</span></div></div>}<div className="weekly-review"><span>Revisão da semana</span><strong>{done}/{weekTasks.length}</strong><small>tarefas planejadas concluídas</small></div></section>;
 }
 
 function TodayView({ dateLabel, tasks, plannedTasks, completed, progress, focusSeconds, onToggle, onDelete, onReorder, onAdd, onFocus }: { dateLabel: string; tasks: Task[]; plannedTasks: Task[]; completed: number; progress: number; focusSeconds: number; onToggle: (id: number) => void; onDelete: (id: number) => void; onReorder: (source: number, target: number) => void; onAdd: () => void; onFocus: () => void }) {
@@ -676,9 +705,27 @@ function futureGoalDuration(createdAt: string, completedAt: string) {
   return `${months} ${months === 1 ? 'mês' : 'meses'}${remainingDays ? ` e ${remainingDays} ${remainingDays === 1 ? 'dia' : 'dias'}` : ''}`;
 }
 
-function FutureVision({ futureGoals, onCreate, onComplete }: { futureGoals: FutureGoal[]; onCreate: (title: string, timeframeMonths: FutureGoal['timeframeMonths']) => Promise<void>; onComplete: (id: number) => Promise<void> }) {
+function DataBackup({ account, notify }: { account: Account; notify: (message: string) => void }) {
+  const [exporting, setExporting] = useState(false);
+  const download = async () => {
+    if (!account.sessionToken) return;
+    setExporting(true);
+    try {
+      const response = await fetch('/api/workspace?mode=export', { headers: { Authorization: `Bearer ${account.sessionToken}` } });
+      if (!response.ok) throw new Error('Não foi possível preparar o backup.');
+      const backup = await response.json();
+      const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }));
+      const link = document.createElement('a'); link.href = url; link.download = `cave-backup-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(url);
+      notify('Backup baixado com sucesso.');
+    } catch (error) { notify(error instanceof Error ? error.message : 'Não foi possível baixar o backup.'); } finally { setExporting(false); }
+  };
+  return <section className="data-backup"><div><span className="eyebrow">Seus dados</span><h2>Backup pessoal</h2><p>Baixe suas tarefas, metas, estudos e histórico de foco quando quiser.</p></div><button className="secondary-button" onClick={() => void download()} disabled={exporting}>{exporting ? 'Preparando...' : 'Exportar dados'}</button></section>;
+}
+
+function FutureVision({ futureGoals, onCreate, onComplete }: { futureGoals: FutureGoal[]; onCreate: (title: string, timeframeMonths: FutureGoal['timeframeMonths'], nextStep: string) => Promise<void>; onComplete: (id: number) => Promise<void> }) {
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState('');
+  const [nextStep, setNextStep] = useState('');
   const [timeframeMonths, setTimeframeMonths] = useState<FutureGoal['timeframeMonths']>(1);
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -696,15 +743,16 @@ function FutureVision({ futureGoals, onCreate, onComplete }: { futureGoals: Futu
       {futureGoals.length ? futureGoals.map((goal) => <article className={`future-goal-card ${goal.completedAt ? 'completed' : ''}`} key={goal.id}>
         <div className="future-goal-meta"><span>{periods.find((period) => period.months === goal.timeframeMonths)?.label ?? `${goal.timeframeMonths} meses`}</span><small>Criada em {formatDate(goal.createdAt)}</small></div>
         <h3>{goal.title}</h3>
+        {goal.nextStep && <p className="future-next-step"><span>Próximo marco</span>{goal.nextStep}</p>}
         {goal.completedAt ? <p className="future-goal-achieved">Realizada em <strong>{futureGoalDuration(goal.createdAt, goal.completedAt)}</strong></p> : <button className="future-complete-button" disabled={busyId === goal.id} onClick={async () => { setBusyId(goal.id); setError(''); try { await onComplete(goal.id); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Não foi possível concluir a meta.'); } finally { setBusyId(null); } }}>{busyId === goal.id ? 'Salvando...' : 'Concluir meta'}</button>}
       </article>) : <p className="empty-state">Comece por algo que você quer conquistar nos próximos meses.</p>}
     </div>
     {error && <p className="future-goal-error">{error}</p>}
-    {adding && <div className="modal-backdrop" onClick={() => setAdding(false)}><form className="add-modal future-goal-modal" onClick={(event) => event.stopPropagation()} onSubmit={async (event) => { event.preventDefault(); if (!title.trim()) return; setSaving(true); setError(''); try { await onCreate(title.trim(), timeframeMonths); setTitle(''); setTimeframeMonths(1); setAdding(false); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Não foi possível criar a meta.'); } finally { setSaving(false); } }}><div className="modal-handle" /><h2>Nova visão</h2><p>Escolha o horizonte e deixe claro o que você quer realizar.</p><input autoFocus required maxLength={180} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Ex.: concluir meu curso de inglês" /><div className="future-periods" aria-label="Prazo da meta">{periods.map((period) => <button type="button" className={timeframeMonths === period.months ? 'selected' : ''} key={period.months} onClick={() => setTimeframeMonths(period.months)}>{period.label}</button>)}</div><button className="primary-button" type="submit" disabled={saving}>{saving ? 'Salvando...' : 'Adicionar à visão'}</button></form></div>}
+    {adding && <div className="modal-backdrop" onClick={() => setAdding(false)}><form className="add-modal future-goal-modal" onClick={(event) => event.stopPropagation()} onSubmit={async (event) => { event.preventDefault(); if (!title.trim()) return; setSaving(true); setError(''); try { await onCreate(title.trim(), timeframeMonths, nextStep.trim()); setTitle(''); setNextStep(''); setTimeframeMonths(1); setAdding(false); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Não foi possível criar a meta.'); } finally { setSaving(false); } }}><div className="modal-handle" /><h2>Nova visão</h2><p>Escolha o horizonte e deixe claro o que você quer realizar.</p><input autoFocus required maxLength={180} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Ex.: concluir meu curso de inglês" /><input maxLength={180} value={nextStep} onChange={(event) => setNextStep(event.target.value)} placeholder="Primeiro marco ou próximo passo (opcional)" /><div className="future-periods" aria-label="Prazo da meta">{periods.map((period) => <button type="button" className={timeframeMonths === period.months ? 'selected' : ''} key={period.months} onClick={() => setTimeframeMonths(period.months)}>{period.label}</button>)}</div><button className="primary-button" type="submit" disabled={saving}>{saving ? 'Salvando...' : 'Adicionar à visão'}</button></form></div>}
   </section>;
 }
 
-function ProfileView({ account, completed, focusSeconds, completedSessions, goals, futureGoals, history, onCreateGoal, onCreateFutureGoal, onCompleteFutureGoal, onOpen, onLogout }: { account: Account; completed: number; focusSeconds: number; completedSessions: number; goals: Goal[]; futureGoals: FutureGoal[]; history: { day: string; minutes: number }[]; onCreateGoal: (title: string, target: number, period: 'daily' | 'weekly') => Promise<void>; onCreateFutureGoal: (title: string, timeframeMonths: FutureGoal['timeframeMonths']) => Promise<void>; onCompleteFutureGoal: (id: number) => Promise<void>; onOpen: (title: string, body: string) => void; onLogout: () => void }) {
+function ProfileView({ account, completed, focusSeconds, completedSessions, goals, futureGoals, history, onCreateGoal, onCreateFutureGoal, onCompleteFutureGoal, onOpen, onLogout }: { account: Account; completed: number; focusSeconds: number; completedSessions: number; goals: Goal[]; futureGoals: FutureGoal[]; history: { day: string; minutes: number }[]; onCreateGoal: (title: string, target: number, period: 'daily' | 'weekly') => Promise<void>; onCreateFutureGoal: (title: string, timeframeMonths: FutureGoal['timeframeMonths'], nextStep: string) => Promise<void>; onCompleteFutureGoal: (id: number) => Promise<void>; onOpen: (title: string, body: string) => void; onLogout: () => void }) {
   const [addingGoal, setAddingGoal] = useState(false); const [title, setTitle] = useState(''); const [target, setTarget] = useState(60); const [period, setPeriod] = useState<'daily' | 'weekly'>('daily'); const max = Math.max(1, ...history.map((item) => item.minutes));
   return <><section className="profile-head"><div className="profile-avatar">{account.name.charAt(0).toUpperCase()}</div><div><span className="eyebrow">Seu espaço</span><h1>{account.name}</h1><p>{account.email}</p></div><button className="icon-button" aria-label="Lembretes" onClick={async () => { if (!('Notification' in window)) return onOpen('Lembretes', 'Este navegador não oferece notificações.'); const permission = await Notification.requestPermission(); onOpen('Lembretes', permission === 'granted' ? 'Lembretes ativados enquanto o Cave estiver aberto.' : 'Você pode liberar notificações nas configurações do navegador.'); }}>♢</button></section><div className="profile-stats"><div><strong>{completed}</strong><span>tarefas concluídas</span></div><div><strong>{formatDuration(focusSeconds)}</strong><span>foco registrado</span></div><div><strong>{completedSessions}</strong><span>sessões concluídas</span></div></div><section className="section-block"><div className="section-title"><div><span className="eyebrow">Últimos 7 dias</span><h2>Ritmo de foco</h2></div></div><div className="focus-chart">{history.length ? history.map((item) => <div key={item.day}><i style={{ height: `${Math.max(8, (item.minutes / max) * 100)}%` }} /><span>{item.day.slice(8)}</span></div>) : <p className="empty-state">Conclua uma sessão para iniciar seu histórico.</p>}</div></section><section className="section-block"><div className="section-title"><div><span className="eyebrow">Direção</span><h2>Metas</h2></div><button className="text-button" onClick={() => setAddingGoal(true)}>+ Meta</button></div><div className="goal-list">{goals.length ? goals.map((goal) => <div className="goal-card" key={goal.id}><div><strong>{goal.title}</strong><small>{goal.period === 'daily' ? 'Diária' : 'Semanal'} · {goal.currentValue}/{goal.target}</small></div><div className="large-progress"><i style={{ width: `${Math.min(100, goal.currentValue / goal.target * 100)}%` }} /></div></div>) : <p className="empty-state">Crie uma meta simples para ganhar consistência.</p>}</div></section>{addingGoal && <div className="modal-backdrop" onClick={() => setAddingGoal(false)}><form className="add-modal" onClick={(event) => event.stopPropagation()} onSubmit={async (event) => { event.preventDefault(); if (!title.trim()) return; await onCreateGoal(title, target, period); setTitle(''); setAddingGoal(false); }}><div className="modal-handle" /><h2>Nova meta</h2><input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Ex.: 1 hora de foco" /><div className="task-fields"><label>Meta<input type="number" min="1" value={target} onChange={(event) => setTarget(Number(event.target.value))} /></label><label>Período<select value={period} onChange={(event) => setPeriod(event.target.value as 'daily' | 'weekly')}><option value="daily">Diária</option><option value="weekly">Semanal</option></select></label></div><button className="primary-button" type="submit">Criar meta</button></form></div>}<FutureVision futureGoals={futureGoals} onCreate={onCreateFutureGoal} onComplete={onCompleteFutureGoal} /><div className="settings-card"><button onClick={() => onOpen('Lembretes', 'Cadastre data e horário nas tarefas e permita notificações para receber os avisos enquanto o Cave estiver aberto.')}>◌ <span>Lembretes</span>›</button><button onClick={() => onOpen('Exportar dados', 'Suas tarefas, metas e registros de foco agora ficam sincronizados na sua conta.')}>⇩ <span>Dados sincronizados</span>›</button><button className="logout-button" onClick={onLogout}>↪ <span>Sair da conta</span>›</button></div></>;
 }
